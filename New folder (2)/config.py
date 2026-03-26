@@ -1,0 +1,19 @@
+# Shared configuration values: colors, fonts, etc.
+
+# Palette
+BG      = "#f0f4f8"
+CARD    = "#ffffff"
+BORDER  = "#d4dde8"
+BORDER2 = "#b8c8d8"
+BLUE    = "#1a6fd4"
+BLUE_G  = "#3b9bff"
+BLUE_L  = "#e8f0fb"
+TEAL    = "#0e9f8e"
+ORANGE  = "#d96c00"
+RED     = "#d42b2b"
+PURPLE  = "#7040c8"
+SLATE   = "#3a4a5c"
+SLATE2  = "#607080"
+SLATE3  = "#a0b0c0"
+FM      = "Courier New"
+FU      = "Segoe UI"

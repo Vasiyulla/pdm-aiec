@@ -1,0 +1,46 @@
+# ── Python ──────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.env
+venv/
+.venv/
+
+# ── Node / Electron ────────────────────
+node_modules/
+motor-frontend/dist/
+motor-frontend/out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+motor_frontend/
+# ── Database ───────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── OS Generated ──────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── IDE ────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Archives ───────────────────────────
+*.zip
+*.tar.gz
+*.rar
+
+# ── Media (large files) ───────────────
+*.mp4
+*.avi
+*.mkv
+*.pt
