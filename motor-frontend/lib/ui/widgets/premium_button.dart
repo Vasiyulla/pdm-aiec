@@ -42,7 +42,9 @@ class PremiumButton extends StatelessWidget {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-        color: isDisabled ? Colors.grey.withValues(alpha: 0.2) : null,
+        color: isDisabled 
+            ? (Theme.of(context).brightness == Brightness.dark ? Colors.white10 : Colors.black12) 
+            : null,
         boxShadow: isDisabled
             ? []
             : [

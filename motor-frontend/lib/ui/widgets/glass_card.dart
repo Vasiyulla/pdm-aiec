@@ -82,55 +82,64 @@ class MetricTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       borderColor: color.withValues(alpha: 0.25),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
+          // Top row: icon + unit label
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                width: 38, height: 38,
+                width: 28, height: 28,
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                child: Icon(icon, size: 20, color: color),
+                child: Icon(icon, size: 15, color: color),
               ),
-              Text(unit,
-                style: Theme.of(context).textTheme.bodyMedium
-                    ?.copyWith(color: color.withValues(alpha: 0.8), fontSize: 11),
+              Flexible(
+                child: Text(unit,
+                  style: Theme.of(context).textTheme.bodyMedium
+                      ?.copyWith(color: color.withValues(alpha: 0.7), fontSize: 9, fontWeight: FontWeight.w700),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 6),
+          // Value
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
             child: Text(value,
               style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                fontSize: 22,
+                height: 1.1,
               ),
             ),
           ),
-          const SizedBox(height: 4),
+          // Label
           Text(label,
-            style: Theme.of(context).textTheme.bodyMedium,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 11, height: 1.1),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
+          // Optional progress bar
           if (progress != null) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
             ClipRRect(
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(3),
               child: LinearProgressIndicator(
                 value: progress!.clamp(0.0, 1.0),
                 backgroundColor: Theme.of(context).brightness == Brightness.dark
                     ? AppColors.bg500
                     : AppColors.lightBorder,
                 valueColor: AlwaysStoppedAnimation(color),
-                minHeight: 4,
+                minHeight: 2,
               ),
             ),
           ],
@@ -191,29 +200,29 @@ class StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 7, height: 7,
+            width: 6, height: 6,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color,
               boxShadow: pulsing
-                  ? [BoxShadow(color: color, blurRadius: 6)]
+                  ? [BoxShadow(color: color, blurRadius: 4, spreadRadius: 1)]
                   : [],
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 5),
           Text(label,
             style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: color, fontSize: 11,
+              color: color, fontSize: 10.5, fontWeight: FontWeight.w600,
             ),
           ),
         ],

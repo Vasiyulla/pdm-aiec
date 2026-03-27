@@ -7,6 +7,7 @@ import 'package:motor_frontend/core/services/auth_service.dart';
 import 'package:motor_frontend/core/services/api_service.dart';
 import 'package:motor_frontend/core/services/websocket_service.dart';
 import 'package:motor_frontend/core/providers/motor_provider.dart';
+import 'package:motor_frontend/ui/widgets/motor_data_notifiers.dart';
 import 'package:motor_frontend/core/providers/auth_provider.dart';
 import 'package:motor_frontend/core/providers/theme_provider.dart';
 import 'package:motor_frontend/core/providers/maintenance_provider.dart';
@@ -32,10 +33,12 @@ class MotorDashboardApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider(AuthService())),
+        Provider<MotorDataNotifiers>(create: (_) => MotorDataNotifiers()),
         ChangeNotifierProvider(
-          create: (_) => MotorProvider(
+          create: (ctx) => MotorProvider(
             ApiService(),
             WebSocketService(),
+            ctx.read<MotorDataNotifiers>(),
           ),
         ),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),

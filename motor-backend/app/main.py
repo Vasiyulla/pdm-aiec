@@ -23,6 +23,7 @@ Endpoints:
   GET  /api/reports/export       — download CSV report
   WS   /ws/monitor               — WebSocket live data stream (500 ms)
   WS   /ws/alerts                — WebSocket alert stream
+  POST /api/chat                 — ARIA AI chatbot (personality-driven)
 """
 
 from fastapi import FastAPI
@@ -30,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
-from app.routers import motor, monitor, ports, logs, alerts, reports, ws_router, maintenance
+from app.routers import motor, monitor, ports, logs, alerts, reports, ws_router, maintenance, chat
 from app.db.database import init_db
 from app.services.poller import PollerService
 
@@ -80,6 +81,7 @@ app.include_router(logs.router,    prefix="/api", tags=["Event Log"])
 app.include_router(alerts.router,  prefix="/api", tags=["Alerts"])
 app.include_router(reports.router, prefix="/api", tags=["Reports"])
 app.include_router(maintenance.router, prefix="/api", tags=["Predictive Maintenance"])
+app.include_router(chat.router, prefix="/api", tags=["ARIA AI Assistant"])
 app.include_router(ws_router.router, tags=["WebSocket"])
 
 

@@ -49,9 +49,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
           // Header
           Container(
             height: 64, padding: const EdgeInsets.symmetric(horizontal: 24),
-            decoration: const BoxDecoration(
-              color: AppColors.bg900,
-              border: Border(bottom: BorderSide(color: AppColors.bg600)),
+            decoration: BoxDecoration(
+              color: Theme.of(context).brightness == Brightness.dark 
+                  ? AppColors.bg900 
+                  : AppColors.lightSurface,
+              border: Border(bottom: BorderSide(
+                  color: Theme.of(context).brightness == Brightness.dark 
+                      ? AppColors.bg600 
+                      : AppColors.lightBorder, 
+                  width: 0.5)),
             ),
             child: Row(
               children: [
@@ -60,7 +66,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 // Metric selector
                 DropdownButton<String>(
                   value: _metric,
-                  dropdownColor: AppColors.bg700,
+                  dropdownColor: Theme.of(context).brightness == Brightness.dark 
+                      ? AppColors.bg700 
+                      : AppColors.lightSurface,
                   items: _metrics.entries.map((e) =>
                     DropdownMenuItem(value: e.key, child: Text(e.value))
                   ).toList(),
@@ -120,7 +128,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         const SizedBox(height: 16),
                         // Header
                         _tableHeader(context),
-                        const Divider(color: AppColors.bg500, height: 16),
+                        Divider(
+                          color: Theme.of(context).brightness == Brightness.dark 
+                              ? AppColors.bg500 
+                              : AppColors.lightBorder, 
+                          height: 16
+                        ),
                         // Rows
                         ...rows.take(100).map((r) => _tableRow(context, r)),
                       ],
@@ -229,8 +242,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.bg600, width: 0.5)),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(
+            color: Theme.of(context).brightness == Brightness.dark 
+                ? AppColors.bg600 
+                : AppColors.lightBorder, 
+            width: 0.5)),
       ),
       child: Row(
         children: [
@@ -260,7 +277,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _td(dynamic v) => Expanded(
     child: Text(
       v == null ? '--' : (v as num).toStringAsFixed(1),
-      style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
+      style: TextStyle(
+          fontSize: 12, 
+          color: Theme.of(context).brightness == Brightness.dark 
+              ? AppColors.textPrimary 
+              : AppColors.lightTextPrimary),
     ),
   );
 }
@@ -271,9 +292,12 @@ class _TH extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Text(text,
-    style: const TextStyle(
+    style: TextStyle(
       fontSize: 11, fontWeight: FontWeight.w700,
-      color: AppColors.textSecondary, letterSpacing: 0.5,
+      color: Theme.of(context).brightness == Brightness.dark 
+          ? AppColors.textSecondary 
+          : AppColors.lightTextSecondary, 
+      letterSpacing: 0.5,
     ),
   );
 }

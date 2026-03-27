@@ -9,9 +9,9 @@ import 'package:intl/intl.dart';
 import '../../core/providers/motor_provider.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../../ui/widgets/motor_data_notifiers.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/glass_card.dart';
-import '../widgets/premium_button.dart';
 import '../router/app_router.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -44,248 +44,262 @@ class _DashboardScreenState extends State<DashboardScreen> {
 class _DashboardContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final motor = context.watch<MotorProvider>();
+    final motor = context.read<MotorProvider>();
+    final notifiers = context.read<MotorDataNotifiers>();
     final auth = context.watch<AuthProvider>();
-    final data = motor.latestData;
-    final vfd = data?.vfd;
-    final pzem = data?.pzem;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ── Top bar ─────────────────────────────────────────────────
-        _TopBar(auth: auth, motor: motor),
-
-        // ── Content scroll ──────────────────────────────────────────
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final w = constraints.maxWidth;
-              final isWide = w > 1200;
-              final isMedium = w > 800;
-              final pad = isWide ? 24.0 : (isMedium ? 16.0 : 12.0);
-
-              return SingleChildScrollView(
-                padding: EdgeInsets.all(pad),
-                child: Column(
+    return ValueListenableBuilder(
+      valueListenable: notifiers.vfd,
+      builder: (context, vfd, _) {
+        return ValueListenableBuilder(
+          valueListenable: notifiers.pzem,
+          builder: (context, pzem, _) {
+            return ValueListenableBuilder(
+              valueListenable: notifiers.charts,
+              builder: (context, charts, _) {
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // KPI Row — wraps on smaller screens
-                    _buildKpiGrid(context, motor, vfd, pzem, isWide, isMedium),
-                    const SizedBox(height: 24),
+                    // ── Top bar ─────────────────────────────────────────────────
+                    _TopBar(auth: auth, motor: motor, vfd: vfd),
 
-                    // Motor Control + Live Gauges
-                    if (isWide)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: 320,
-                            child: _MotorControlCard(motor: motor, auth: auth),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            child: RepaintBoundary(
-                              child: _TrendChart(
-                                title: 'RPM (Live)',
-                                data: motor.rpmHistory,
-                                color: AppColors.primary,
-                                unit: 'RPM',
-                                maxY: 1600,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            child: RepaintBoundary(
-                              child: _TrendChart(
-                                title: 'Torque (Live)',
-                                data: motor.torqueHistory,
-                                color: AppColors.accentAmber,
-                                unit: 'N·m',
-                                maxY: 30,
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                    else ...[
-                      _MotorControlCard(motor: motor, auth: auth),
-                      const SizedBox(height: 16),
-                      if (isMedium)
-                        Row(
-                          children: [
-                            Expanded(
-                              child: RepaintBoundary(
-                                child: _TrendChart(
-                                  title: 'RPM (Live)',
-                                  data: motor.rpmHistory,
-                                  color: AppColors.primary,
-                                  unit: 'RPM',
-                                  maxY: 1600,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: RepaintBoundary(
-                                child: _TrendChart(
-                                  title: 'Torque (Live)',
-                                  data: motor.torqueHistory,
-                                  color: AppColors.accentAmber,
-                                  unit: 'N·m',
-                                  maxY: 30,
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      else ...[
-                        RepaintBoundary(
-                          child: _TrendChart(
-                            title: 'RPM (Live)',
-                            data: motor.rpmHistory,
-                            color: AppColors.primary,
-                            unit: 'RPM',
-                            maxY: 1600,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        RepaintBoundary(
-                          child: _TrendChart(
-                            title: 'Torque (Live)',
-                            data: motor.torqueHistory,
-                            color: AppColors.accentAmber,
-                            unit: 'N·m',
-                            maxY: 30,
-                          ),
-                        ),
-                      ],
-                    ],
-                    const SizedBox(height: 24),
+                    // ── Content scroll ──────────────────────────────────────────
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final w = constraints.maxWidth;
+                          final isWide = w > 1200;
+                          final isMedium = w > 800;
+                          final pad = isWide ? 24.0 : (isMedium ? 16.0 : 12.0);
 
-                    // Bottom row — Weight input + Charts + Alerts
-                    if (isWide)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: 300,
-                            child: _WeightInputCard(motor: motor),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            child: RepaintBoundary(
-                              child: _ScatterChart(
-                                title: 'Power vs Weight',
-                                data: motor.powerVsWeight,
-                                xKey: 'weight',
-                                yKey: 'power',
-                                xUnit: 'kg',
-                                yUnit: 'W',
-                                color: AppColors.accentGreen,
-                                maxY: 1200,
-                              ),
+                          return SingleChildScrollView(
+                            padding: EdgeInsets.all(pad),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // KPI Row — wraps on smaller screens
+                                _buildKpiGrid(context, motor, vfd, pzem, isWide, isMedium),
+                                const SizedBox(height: 24),
+
+                                // Motor Control + Live Gauges
+                                if (isWide)
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      SizedBox(
+                                        width: 320,
+                                        child: _MotorControlCard(motor: motor, auth: auth),
+                                      ),
+                                      const SizedBox(width: 20),
+                                      Expanded(
+                                        child: RepaintBoundary(
+                                          child: _TrendChart(
+                                            title: 'RPM (Live)',
+                                            data: charts.rpm,
+                                            color: AppColors.primary,
+                                            unit: 'RPM',
+                                            maxY: 1600,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 20),
+                                      Expanded(
+                                        child: RepaintBoundary(
+                                          child: _TrendChart(
+                                            title: 'Torque (Live)',
+                                            data: charts.torque,
+                                            color: AppColors.accentAmber,
+                                            unit: 'N·m',
+                                            maxY: 30,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                else ...[
+                                  _MotorControlCard(motor: motor, auth: auth),
+                                  const SizedBox(height: 16),
+                                  if (isMedium)
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: RepaintBoundary(
+                                            child: _TrendChart(
+                                              title: 'RPM (Live)',
+                                              data: charts.rpm,
+                                              color: AppColors.primary,
+                                              unit: 'RPM',
+                                              maxY: 1600,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: RepaintBoundary(
+                                            child: _TrendChart(
+                                              title: 'Torque (Live)',
+                                              data: charts.torque,
+                                              color: AppColors.accentAmber,
+                                              unit: 'N·m',
+                                              maxY: 30,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  else ...[
+                                    RepaintBoundary(
+                                      child: _TrendChart(
+                                        title: 'RPM (Live)',
+                                        data: charts.rpm,
+                                        color: AppColors.primary,
+                                        unit: 'RPM',
+                                        maxY: 1600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    RepaintBoundary(
+                                      child: _TrendChart(
+                                        title: 'Torque (Live)',
+                                        data: charts.torque,
+                                        color: AppColors.accentAmber,
+                                        unit: 'N·m',
+                                        maxY: 30,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                                const SizedBox(height: 24),
+
+                                // Bottom row — Weight input + Charts + Alerts
+                                if (isWide)
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      SizedBox(
+                                        width: 300,
+                                        child: _WeightInputCard(motor: motor),
+                                      ),
+                                      const SizedBox(width: 20),
+                                      Expanded(
+                                        child: RepaintBoundary(
+                                          child: _ScatterChart(
+                                            title: 'Power vs Weight',
+                                            data: motor.powerVsWeight,
+                                            xKey: 'weight',
+                                            yKey: 'power',
+                                            xUnit: 'kg',
+                                            yUnit: 'W',
+                                            color: AppColors.accentGreen,
+                                            maxY: 1200,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 20),
+                                      Expanded(
+                                        child: RepaintBoundary(
+                                          child: _ScatterChart(
+                                            title: 'Torque vs Weight',
+                                            data: motor.powerVsWeight,
+                                            xKey: 'weight',
+                                            yKey: 'torque',
+                                            xUnit: 'kg',
+                                            yUnit: 'N·m',
+                                            color: AppColors.accentOrange,
+                                            maxY: 30,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 20),
+                                      SizedBox(
+                                        width: 300,
+                                        child: _AlertsCard(motor: motor),
+                                      ),
+                                    ],
+                                  )
+                                else ...[
+                                  _WeightInputCard(motor: motor),
+                                  const SizedBox(height: 16),
+                                  if (isMedium)
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: RepaintBoundary(
+                                            child: _ScatterChart(
+                                              title: 'Power vs Weight',
+                                              data: motor.powerVsWeight,
+                                              xKey: 'weight',
+                                              yKey: 'power',
+                                              xUnit: 'kg',
+                                              yUnit: 'W',
+                                              color: AppColors.accentGreen,
+                                              maxY: 1200,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: RepaintBoundary(
+                                            child: _ScatterChart(
+                                              title: 'Torque vs Weight',
+                                              data: motor.powerVsWeight,
+                                              xKey: 'weight',
+                                              yKey: 'torque',
+                                              xUnit: 'kg',
+                                              yUnit: 'N·m',
+                                              color: AppColors.accentOrange,
+                                              maxY: 30,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  else ...[
+                                    RepaintBoundary(
+                                      child: _ScatterChart(
+                                        title: 'Power vs Weight',
+                                        data: motor.powerVsWeight,
+                                        xKey: 'weight',
+                                        yKey: 'power',
+                                        xUnit: 'kg',
+                                        yUnit: 'W',
+                                        color: AppColors.accentGreen,
+                                        maxY: 1200,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    RepaintBoundary(
+                                      child: _ScatterChart(
+                                        title: 'Torque vs Weight',
+                                        data: motor.powerVsWeight,
+                                        xKey: 'weight',
+                                        yKey: 'torque',
+                                        xUnit: 'kg',
+                                        yUnit: 'N·m',
+                                        color: AppColors.accentOrange,
+                                        maxY: 30,
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 16),
+                                  _AlertsCard(motor: motor),
+                                ],
+                              ],
                             ),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            child: RepaintBoundary(
-                              child: _ScatterChart(
-                                title: 'Torque vs Weight',
-                                data: motor.powerVsWeight,
-                                xKey: 'weight',
-                                yKey: 'torque',
-                                xUnit: 'kg',
-                                yUnit: 'N·m',
-                                color: AppColors.accentOrange,
-                                maxY: 30,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          SizedBox(
-                            width: 300,
-                            child: _AlertsCard(motor: motor),
-                          ),
-                        ],
-                      )
-                    else ...[
-                      _WeightInputCard(motor: motor),
-                      const SizedBox(height: 16),
-                      if (isMedium)
-                        Row(
-                          children: [
-                            Expanded(
-                              child: RepaintBoundary(
-                                child: _ScatterChart(
-                                  title: 'Power vs Weight',
-                                  data: motor.powerVsWeight,
-                                  xKey: 'weight',
-                                  yKey: 'power',
-                                  xUnit: 'kg',
-                                  yUnit: 'W',
-                                  color: AppColors.accentGreen,
-                                  maxY: 1200,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: RepaintBoundary(
-                                child: _ScatterChart(
-                                  title: 'Torque vs Weight',
-                                  data: motor.powerVsWeight,
-                                  xKey: 'weight',
-                                  yKey: 'torque',
-                                  xUnit: 'kg',
-                                  yUnit: 'N·m',
-                                  color: AppColors.accentOrange,
-                                  maxY: 30,
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      else ...[
-                        RepaintBoundary(
-                          child: _ScatterChart(
-                            title: 'Power vs Weight',
-                            data: motor.powerVsWeight,
-                            xKey: 'weight',
-                            yKey: 'power',
-                            xUnit: 'kg',
-                            yUnit: 'W',
-                            color: AppColors.accentGreen,
-                            maxY: 1200,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        RepaintBoundary(
-                          child: _ScatterChart(
-                            title: 'Torque vs Weight',
-                            data: motor.powerVsWeight,
-                            xKey: 'weight',
-                            yKey: 'torque',
-                            xUnit: 'kg',
-                            yUnit: 'N·m',
-                            color: AppColors.accentOrange,
-                            maxY: 30,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      _AlertsCard(motor: motor),
-                    ],
+                          );
+                        },
+                      ),
+                    ),
                   ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
+
 
   Widget _buildKpiGrid(BuildContext context, MotorProvider motor,
       vfd, pzem, bool isWide, bool isMedium) {
@@ -368,8 +382,9 @@ class _DashboardContent extends StatelessWidget {
 class _TopBar extends StatelessWidget {
   final AuthProvider auth;
   final MotorProvider motor;
+  final VfdSnapshot vfd;
 
-  const _TopBar({required this.auth, required this.motor});
+  const _TopBar({required this.auth, required this.motor, required this.vfd});
 
   @override
   Widget build(BuildContext context) {
@@ -392,7 +407,7 @@ class _TopBar extends StatelessWidget {
               Text('Dashboard',
                 style: Theme.of(context).textTheme.titleLarge),
               Text(
-                'Last update: ${motor.latestData != null ? _ts(motor.latestData!.timestamp) : "—"}',
+                'Last update: ${_ts(DateTime.now().millisecondsSinceEpoch / 1000.0)}',
                 style: Theme.of(context).textTheme.bodyMedium
                     ?.copyWith(fontSize: 11),
               ),
@@ -408,8 +423,7 @@ class _TopBar extends StatelessWidget {
             pulsing: motor.deviceConnected,
           ),
           const SizedBox(width: 10),
-          if (motor.latestData?.motorState == 'FWD' ||
-              motor.latestData?.motorState == 'REV')
+          if (vfd.motorRpm > 0)
             StatusChip(
               label: 'Motor Running',
               color: AppColors.statusRunning,
@@ -418,6 +432,7 @@ class _TopBar extends StatelessWidget {
           else
             StatusChip(label: 'Motor Stopped', color: AppColors.statusStopped),
           const SizedBox(width: 16),
+
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
             tooltip: 'Refresh',
@@ -499,55 +514,75 @@ class _MotorControlCardState extends State<_MotorControlCard> {
     final canOp = widget.auth.canOperate;
 
     return GlassCard(
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.tune_rounded, size: 18, color: AppColors.primary),
+              const Icon(Icons.tune_rounded, size: 16, color: AppColors.primary),
               const SizedBox(width: 8),
               Text('Motor Control',
-                style: Theme.of(context).textTheme.titleMedium),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
           // Motor state indicator
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: 12),
             decoration: BoxDecoration(
               color: _stateColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _stateColor.withValues(alpha: 0.3)),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _stateColor.withValues(alpha: 0.25)),
             ),
-            child: Column(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(_stateIcon, size: 36, color: _stateColor),
-                const SizedBox(height: 6),
+                Icon(_stateIcon, size: 24, color: _stateColor),
+                const SizedBox(width: 10),
                 Text(widget.motor.motorState,
                   style: Theme.of(context).textTheme.titleMedium
-                      ?.copyWith(color: _stateColor, fontWeight: FontWeight.w700),
+                      ?.copyWith(color: _stateColor, fontWeight: FontWeight.w800),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
+          Divider(
+            color: (Theme.of(context).brightness == Brightness.dark 
+                ? AppColors.bg500 
+                : AppColors.lightBorder).withValues(alpha: 0.5),
+            height: 24,
+          ),
+          const SizedBox(height: 12),
 
-          // Direction selector
+          // Direction selector (Segmented Toggle)
           if (!running) ...[
-            Text('Direction', style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: _dirBtn('forward', Icons.arrow_forward_rounded, 'Forward'),
+            Text('Direction', style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Center(
+              child: Container(
+                width: 290, // ~140 + 8 + 140 + a bit for border padding
+                height: 38,
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).brightness == Brightness.dark ? AppColors.bg700 : AppColors.lightBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: (Theme.of(context).brightness == Brightness.dark ? AppColors.bg500 : AppColors.lightBorder)),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _dirBtn('reverse', Icons.arrow_back_rounded, 'Reverse'),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _segmentedBtn('forward', Icons.arrow_forward_rounded, 'Forward'),
+                    ),
+                    Expanded(
+                      child: _segmentedBtn('reverse', Icons.arrow_back_rounded, 'Reverse'),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
             const SizedBox(height: 16),
 
@@ -555,87 +590,141 @@ class _MotorControlCardState extends State<_MotorControlCard> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Frequency', style: Theme.of(context).textTheme.bodyMedium),
+                Text('Frequency', style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12, fontWeight: FontWeight.w600)),
                 Text('${_freq.toStringAsFixed(1)} Hz',
-                  style: Theme.of(context).textTheme.labelLarge
-                      ?.copyWith(color: AppColors.primary)),
+                   style: Theme.of(context).textTheme.labelLarge
+                       ?.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700, fontSize: 13)),
               ],
             ),
-            Slider(
-              value: _freq,
-              min: 0.5, max: 50.0,
-              divisions: 99,
-              activeColor: AppColors.primary,
-              inactiveColor: Theme.of(context).brightness == Brightness.dark
-                  ? AppColors.bg600
-                  : AppColors.lightBorder,
-              onChanged: canOp ? (v) => setState(() => _freq = v) : null,
+            const SizedBox(height: 4),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              ),
+              child: Slider(
+                value: _freq,
+                min: 0.5, max: 50.0,
+                divisions: 99,
+                activeColor: AppColors.primary,
+                inactiveColor: Theme.of(context).brightness == Brightness.dark
+                    ? AppColors.bg600
+                    : AppColors.lightBorder,
+                onChanged: canOp ? (v) => setState(() => _freq = v) : null,
+              ),
             ),
           ] else ...[
             // Frequency adjustment while running
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Adjust Speed', style: Theme.of(context).textTheme.bodyMedium),
+                Text('Adjust Speed', style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12, fontWeight: FontWeight.w600)),
                 Text('${_freq.toStringAsFixed(1)} Hz',
                   style: Theme.of(context).textTheme.labelLarge
-                      ?.copyWith(color: AppColors.primary)),
+                      ?.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700, fontSize: 13)),
               ],
             ),
-            Slider(
-              value: _freq,
-              min: 0.5, max: 50.0,
-              divisions: 99,
-              activeColor: AppColors.primary,
-              inactiveColor: Theme.of(context).brightness == Brightness.dark
-                  ? AppColors.bg600
-                  : AppColors.lightBorder,
-              onChanged: canOp ? (v) => setState(() => _freq = v) : null,
-              onChangeEnd: canOp
-                  ? (v) => widget.motor.setFrequency(v)
-                  : null,
+            const SizedBox(height: 4),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              ),
+              child: Slider(
+                value: _freq,
+                min: 0.5, max: 50.0,
+                divisions: 99,
+                activeColor: AppColors.primary,
+                inactiveColor: Theme.of(context).brightness == Brightness.dark
+                    ? AppColors.bg600
+                    : AppColors.lightBorder,
+                onChanged: canOp ? (v) => setState(() => _freq = v) : null,
+                onChangeEnd: canOp
+                    ? (v) => widget.motor.setFrequency(v)
+                    : null,
+              ),
             ),
           ],
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
 
           // Command buttons
-          if (!running)
-            PremiumButton(
-              label: 'Start Motor',
-              icon: Icons.play_arrow_rounded,
-              onPressed: canOp ? _start : null,
-              color: AppColors.accentGreen,
-              width: double.infinity,
-            )
-          else
-            PremiumButton(
-              label: 'Stop Motor',
-              icon: Icons.stop_rounded,
-              onPressed: canOp ? _stop : null,
-              color: AppColors.statusStopped,
-              width: double.infinity,
-            ),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  height: 44, // 44px Start
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                    label: const Text('Start', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    onPressed: canOp && !running ? _start : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.statusRunning,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: AppColors.statusRunning.withValues(alpha: 0.1),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: SizedBox(
+                  height: 44,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.stop_rounded, size: 18),
+                    label: const Text('Stop', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    onPressed: canOp ? _stop : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.statusFault,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
-                child: PremiumButton(
-                  label: 'E-Stop',
-                  icon: Icons.warning_amber_rounded,
-                  onPressed: canOp ? _eStop : null,
-                  color: AppColors.accentRed,
-                  height: 40,
+                child: SizedBox(
+                  height: 40, // 40px E-Stop
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.warning_amber_rounded, size: 15),
+                    label: const Text('E-Stop', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    onPressed: canOp ? _eStop : null,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.accentRed,
+                      side: const BorderSide(color: AppColors.accentRed),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: PremiumButton(
-                  label: 'Reset',
-                  icon: Icons.restart_alt_rounded,
-                  onPressed: canOp ? _reset : null,
-                  color: AppColors.accentAmber,
-                  height: 40,
+                child: SizedBox(
+                  height: 40, // 40px Reset
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.restart_alt_rounded, size: 15),
+                    label: const Text('Reset', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    onPressed: canOp ? _reset : null,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.accentAmber,
+                      side: const BorderSide(color: AppColors.accentAmber),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -669,38 +758,30 @@ class _MotorControlCardState extends State<_MotorControlCard> {
     );
   }
 
-  Widget _dirBtn(String dir, IconData icon, String label) {
+  Widget _segmentedBtn(String dir, IconData icon, String label) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final active = _direction == dir;
+    final inactiveColor = isDark ? AppColors.textSecondary : AppColors.lightTextSecondary;
+    
     return GestureDetector(
       onTap: () => setState(() => _direction = dir),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
         decoration: BoxDecoration(
-          color: active
-              ? AppColors.primary.withValues(alpha: 0.15)
-              : (Theme.of(context).brightness == Brightness.dark
-                  ? AppColors.bg700
-                  : AppColors.lightBg),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: active
-                ? AppColors.primary
-                : (Theme.of(context).brightness == Brightness.dark
-                    ? AppColors.bg500
-                    : AppColors.lightBorder),
-          ),
+          color: active ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16,
-                color: active ? AppColors.primary : AppColors.textSecondary),
-            const SizedBox(width: 4),
+            Icon(icon, size: 14,
+                color: active ? Colors.white : inactiveColor),
+            const SizedBox(width: 6),
             Text(label,
               style: TextStyle(
                 fontSize: 12,
-                color: active ? AppColors.primary : AppColors.textSecondary,
-                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                color: active ? Colors.white : inactiveColor,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
           ],
@@ -858,38 +939,39 @@ class _WeightInputCardState extends State<_WeightInputCard> {
     final fieldBorder = isDark ? AppColors.bg500 : const Color(0xFFCBD5E1);
 
     return GlassCard(
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: AppColors.accentOrange.withValues(alpha: 0.15),
+                  color: AppColors.accentOrange.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(Icons.fitness_center_rounded,
-                    size: 18, color: AppColors.accentOrange),
+                    size: 14, color: AppColors.accentOrange),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('Load Analysis',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         color: textColor,
                         fontWeight: FontWeight.w700,
                       )),
                     Text('Spring balance readings',
-                      style: TextStyle(fontSize: 11, color: subtleText)),
+                      style: TextStyle(fontSize: 10, color: subtleText)),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
 
           // S1 and S2 input fields side by side
           Row(
@@ -927,12 +1009,13 @@ class _WeightInputCardState extends State<_WeightInputCard> {
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
           // Net weight display badge
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+            height: 36, // 36px height
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
@@ -940,20 +1023,20 @@ class _WeightInputCardState extends State<_WeightInputCard> {
                   AppColors.accentAmber.withValues(alpha: 0.08),
                 ],
               ),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: AppColors.accentOrange.withValues(alpha: 0.25),
+                color: AppColors.accentOrange.withValues(alpha: 0.2),
               ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('Net Weight (|S1 − S2|)',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                     color: subtleText)),
                 Text('${netWeight.toStringAsFixed(2)} kg',
-                  style: TextStyle(
-                    fontSize: 18,
+                  style: const TextStyle(
+                    fontSize: 15,
                     fontWeight: FontWeight.w800,
                     color: AppColors.accentOrange,
                   ),
@@ -961,93 +1044,96 @@ class _WeightInputCardState extends State<_WeightInputCard> {
               ],
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
           // Current live readings display
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: fieldBg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: fieldBorder),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: fieldBorder.withValues(alpha: 0.5)),
             ),
             child: Column(
               children: [
                 _miniStat(context, 'Power',
                   '${(widget.motor.latestData?.vfd?.power ?? 0).toStringAsFixed(0)} W',
                   AppColors.accentGreen, subtleText),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 _miniStat(context, 'Torque',
                   '${_currentTorque.toStringAsFixed(2)} N·m',
                   AppColors.accentOrange, subtleText),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
                 _miniStat(context, 'Data Points',
                   '$dataPoints',
                   AppColors.primary, subtleText),
               ],
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
-          // Record button
-          SizedBox(
-            width: double.infinity,
-            height: 44,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.add_chart_rounded, size: 18),
-              label: const Text('Record Data Point',
-                style: TextStyle(fontWeight: FontWeight.w600)),
-              onPressed: running
-                  ? () => widget.motor.recordWeightDataPoint()
-                  : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accentGreen,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-                elevation: 0,
+          // Record + Clear in a row
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 38,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.add_chart_rounded, size: 14),
+                    label: const Text('Record Data Point',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                    onPressed: running
+                        ? () => widget.motor.recordWeightDataPoint()
+                        : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accentGreen,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            height: 36,
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.delete_sweep_rounded, size: 16),
-              label: const Text('Clear Data', style: TextStyle(fontSize: 12)),
-              onPressed: dataPoints > 0
-                  ? () => widget.motor.clearWeightData()
-                  : null,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.accentRed,
-                side: const BorderSide(color: AppColors.accentRed),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 6),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 38,
+                child: OutlinedButton(
+                  onPressed: dataPoints > 0
+                      ? () => widget.motor.clearWeightData()
+                      : null,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentRed,
+                    side: const BorderSide(color: AppColors.accentRed),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  child: const Text('Clear', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                ),
               ),
-            ),
+            ],
           ),
 
           if (!running) ...[
             const SizedBox(height: 10),
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 color: AppColors.accentAmber.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: AppColors.accentAmber.withValues(alpha: 0.3)),
+                  color: AppColors.accentAmber.withValues(alpha: 0.2)),
               ),
               child: Row(
                 children: [
                   const Icon(Icons.info_outline_rounded,
-                      size: 14, color: AppColors.accentAmber),
+                      size: 12, color: AppColors.accentAmber),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text('Start motor to record data',
                       style: TextStyle(
-                        fontSize: 11, color: AppColors.accentAmber),
+                        fontSize: 10, color: AppColors.accentAmber, fontWeight: FontWeight.w500),
                     ),
                   ),
                 ],
@@ -1075,7 +1161,7 @@ class _WeightInputCardState extends State<_WeightInputCard> {
         Row(
           children: [
             Container(
-              width: 8, height: 8,
+              width: 6, height: 6,
               decoration: BoxDecoration(
                 color: color,
                 shape: BoxShape.circle,
@@ -1083,49 +1169,51 @@ class _WeightInputCardState extends State<_WeightInputCard> {
             ),
             const SizedBox(width: 6),
             Text(label, style: TextStyle(
-              fontSize: 12, fontWeight: FontWeight.w600,
+              fontSize: 11, fontWeight: FontWeight.w700,
               color: subtleText)),
           ],
         ),
         const SizedBox(height: 6),
-        TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: Theme.of(context).brightness == Brightness.dark
-                ? AppColors.textPrimary
-                : const Color(0xFF1A1A2E),
+        SizedBox(
+          height: 38, // 40px desired, but we can use 38 for tighter feel
+          child: TextField(
+            controller: controller,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? AppColors.textPrimary
+                  : const Color(0xFF1A1A2E),
+            ),
+            decoration: InputDecoration(
+              suffixText: 'kg',
+              suffixStyle: TextStyle(
+                color: subtleText.withValues(alpha: 0.6),
+                fontWeight: FontWeight.w600,
+                fontSize: 10,
+              ),
+              hintText: '0.0',
+              hintStyle: TextStyle(color: subtleText.withValues(alpha: 0.4)),
+              filled: true,
+              fillColor: fieldBg,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: fieldBorder),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: fieldBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: color, width: 1.2),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10, vertical: 0),
+            ),
+            onChanged: onChanged,
           ),
-          decoration: InputDecoration(
-            suffixText: 'kg',
-            suffixStyle: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-            ),
-            hintText: '0.0',
-            hintStyle: TextStyle(color: subtleText.withValues(alpha: 0.5)),
-            filled: true,
-            fillColor: fieldBg,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: fieldBorder),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: fieldBorder),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: color, width: 1.5),
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12, vertical: 10),
-            isDense: true,
-          ),
-          onChanged: onChanged,
         ),
       ],
     );

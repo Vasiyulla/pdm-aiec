@@ -52,6 +52,7 @@ class _LoginScreenState extends State<LoginScreen>
     final auth = context.read<AuthProvider>();
     final ok = await auth.login(_userCtrl.text.trim(), _passCtrl.text);
     if (!mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     if (ok) {
       Navigator.pushReplacementNamed(context, AppRouter.dashboard);
     } else {
@@ -64,7 +65,7 @@ class _LoginScreenState extends State<LoginScreen>
               Text(auth.error ?? 'Login failed'),
             ],
           ),
-          backgroundColor: AppColors.bg700,
+          backgroundColor: isDark ? AppColors.bg700 : AppColors.lightTextPrimary,
         ),
       );
     }

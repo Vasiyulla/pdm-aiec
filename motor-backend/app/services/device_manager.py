@@ -1,100 +1,83 @@
 """
 Device Manager — singleton that owns the GD200A and PZEM-004T driver instances.
-Thread-safe: all hardware calls go through asyncio.run_in_executor so they
-never block the FastAPI event loop.
+
+FIX LOG (v2):
+  - Replaced asyncio.Lock (_bus_lock) with threading.Lock for serial I/O.
+    asyncio.Lock held across run_in_executor calls was stalling the entire
+    event loop during 300-600 ms Modbus transactions.
+  - All serial I/O now runs in a dedicated ThreadPoolExecutor (max_workers=1)
+    so reads are serialised at the thread level, never at the event loop level.
+  - Motor commands no longer acquire any lock; they run in the same executor
+    and serialisation is guaranteed by max_workers=1.
+  - read_monitor() now returns a single flat dict assembled inside the worker
+    thread — zero lock contention on the asyncio side.
+  - Value validation / sanity checks added so garbage reads are discarded.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import platform
 import time
-from threading import Lock
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock as ThreadLock
 from typing import Optional
 
 logger = logging.getLogger("motor.device_manager")
 
-# ── Re-use the proven drivers from your original motor_control.py ─────────────
-# We import them here; the original file must be on the Python path.
-# If you rename it, update the import below.
+# ── Driver imports ─────────────────────────────────────────────────────────────
 try:
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "drivers"))
     from gd200a import GD200A
     from pzem004t import PZEM004T
     _DRIVERS_AVAILABLE = True
-except Exception as e:
-    import traceback
-    traceback.print_exc()
+except Exception:
     _DRIVERS_AVAILABLE = False
     logger.warning("Hardware drivers not found — running in SIMULATION mode.")
 
 
-# ── Simulation stubs (used when real hardware is not connected) ───────────────
+# ── Simulation stubs ──────────────────────────────────────────────────────────
 class _SimGD200A:
-    """Generates realistic fake data for UI development / testing."""
-
     def __init__(self, port, **_):
         self.port = port
         self.ok = True
         self.err = ""
         self._freq = 25.0
-        self._state = "STOPPED"   # STOPPED | FWD | REV
-        self.err = ""
+        self._state = "STOPPED"
 
-    def connect(self):
-        self.ok = True
-        return True
-
-    def run_forward(self):
-        self._state = "FWD"
-        return True
-
-    def run_reverse(self):
-        self._state = "REV"
-        return True
+    def connect(self): self.ok = True; return True
+    def run_forward(self): self._state = "FWD"; return True
+    def run_reverse(self): self._state = "REV"; return True
 
     def run_at_freq(self, hz: float):
-        self._freq = hz
-        self._state = "FWD"
-        return True
+        self._freq = hz; self._state = "FWD"; return True
 
     def run_reverse_at_freq(self, hz: float):
-        self._freq = hz
-        self._state = "REV"
-        return True
+        self._freq = hz; self._state = "REV"; return True
 
-    def stop(self):
-        self._state = "STOPPED"
-        return True
-
-    def coast_stop(self):
-        self._state = "STOPPED"
-        return True
-
-    def reset_fault(self):
-        return True
+    def stop(self): self._state = "STOPPED"; return True
+    def coast_stop(self): self._state = "STOPPED"; return True
+    def reset_fault(self): return True
 
     def set_frequency(self, hz: float):
-        self._freq = max(0.0, min(50.0, hz))
-        return True
+        self._freq = max(0.0, min(50.0, hz)); return True
 
     @staticmethod
-    def rpm_to_hz(rpm: float) -> float:
-        return (rpm * 4) / 120.0
+    def rpm_to_hz(rpm: float) -> float: return (rpm * 4) / 120.0
 
     def read_monitor(self):
-        import math, random
-        t = time.time()
+        import random
         running = self._state != "STOPPED"
         freq = self._freq if running else 0.0
-        rpm  = int(freq * 30) + (random.randint(-5, 5) if running else 0)
+        rpm  = int(freq * 30) + (random.randint(-3, 3) if running else 0)
+        volt = 415.0 + random.uniform(-1, 1) if running else 0.0
+        curr = (freq / 50.0) * 3.5 + random.uniform(-0.05, 0.05) if running else 0.0
         return {
             "set_freq":  self._freq,
-            "out_freq":  freq + (random.uniform(-0.1, 0.1) if running else 0),
-            "out_volt":  415.0 + random.uniform(-2, 2) if running else 0.0,
-            "out_curr":  (freq / 50.0) * 3.5 + random.uniform(-0.1, 0.1) if running else 0.0,
+            "out_freq":  round(freq + (random.uniform(-0.05, 0.05) if running else 0), 2),
+            "out_volt":  round(volt, 1),
+            "out_curr":  round(curr, 2),
             "motor_rpm": rpm,
             "source":    "sim",
         }
@@ -108,56 +91,109 @@ class _SimGD200A:
             "fault":   False,
         }
 
-    def disconnect(self):
-        self.ok = False
+    # Sim stubs for optional methods
+    def read_power(self, mon):
+        v = mon.get("out_volt", 0.0)
+        i = mon.get("out_curr", 0.0)
+        pf = 0.85 if i > 0.05 else 0.0
+        pw = (3 ** 0.5) * v * i * pf if i > 0.05 else 0.0
+        return {"voltage": v, "current": i, "power": round(pw, 1), "pf": pf}
+
+    def read_input_voltage(self):
+        import random
+        return round(415.0 + random.uniform(-2, 2), 1)
+
+    def read_hdi_freq_rpm(self, pulses_per_rev=1):
+        import random
+        hz = (self._freq + random.uniform(-0.1, 0.1)) if self._state != "STOPPED" else 0.0
+        rpm = (hz * 60.0) / max(pulses_per_rev, 1)
+        return (round(rpm, 1), round(hz, 2))
+
+    def disconnect(self): self.ok = False
+
+    # Expose register attr so set_frequency path works
+    REG_FREQ_SET = 0x2001
+
+    def _wr(self, reg, val):
+        if reg == self.REG_FREQ_SET:
+            self._freq = val / 100.0
+        return True
 
 
 class _SimPZEM:
-    """Fake PZEM-004T readings."""
-
     def __init__(self, port, **_):
         self.port = port
         self.ok = True
 
-    def connect(self):
-        self.ok = True
-        return True
+    def connect(self): self.ok = True; return True
 
     def read_all(self):
         import random, math
         t = time.time()
         return {
-            "voltage": 230.0 + math.sin(t * 0.1) * 2,
-            "current": 3.2 + random.uniform(-0.2, 0.2),
-            "power":   720.0 + random.uniform(-20, 20),
+            "voltage": round(230.0 + math.sin(t * 0.1) * 1.5, 1),
+            "current": round(3.2 + random.uniform(-0.1, 0.1), 2),
+            "power":   round(720.0 + random.uniform(-10, 10), 1),
             "energy":  1500 + int(t / 10),
-            "freq":    50.0 + random.uniform(-0.05, 0.05),
-            "pf":      0.87 + random.uniform(-0.02, 0.02),
+            "freq":    round(50.0 + random.uniform(-0.02, 0.02), 2),
+            "pf":      round(0.87 + random.uniform(-0.01, 0.01), 2),
         }
 
-    def disconnect(self):
-        self.ok = False
+    def disconnect(self): self.ok = False
+
+
+# ── Value sanity checks ───────────────────────────────────────────────────────
+# Discard obviously wrong readings from noisy RS-485 lines.
+_VFD_LIMITS = {
+    "out_freq":  (0.0, 55.0),      # Hz
+    "out_volt":  (0.0, 500.0),     # V
+    "out_curr":  (0.0, 50.0),      # A
+    "motor_rpm": (0, 3100),        # RPM (4-pole, 50 Hz sync = 1500 rpm + slip)
+    "set_freq":  (0.0, 55.0),
+}
+
+def _validate_vfd(mon: dict) -> dict:
+    """Return mon with out-of-range values replaced by None (caller handles)."""
+    cleaned = dict(mon)
+    for key, (lo, hi) in _VFD_LIMITS.items():
+        v = cleaned.get(key)
+        if v is not None and not (lo <= v <= hi):
+            logger.warning("VFD sanity: %s=%s out of range [%s, %s] — discarded", key, v, lo, hi)
+            cleaned[key] = None
+    return cleaned
 
 
 # ── Device Manager ────────────────────────────────────────────────────────────
 class DeviceManager:
+    """
+    All serial I/O runs on a single-worker ThreadPoolExecutor.
+    max_workers=1 guarantees serial transactions never overlap
+    without ever blocking the asyncio event loop.
+    """
     _instance: Optional["DeviceManager"] = None
-    _lock = Lock()
+    _class_lock = ThreadLock()
 
     def __init__(self):
-        self.vfd: Optional[GD200A | _SimGD200A] = None
-        self.pzem: Optional[PZEM004T | _SimPZEM] = None
-        self._bus_lock = asyncio.Lock()
-        self._motor_state = "STOPPED"   # STOPPED | FWD | REV | FAULT
-        self._oc_threshold = 10.0       # Amps
+        self.vfd = None
+        self.pzem = None
+        # ── KEY FIX: single-worker executor for all serial I/O ──────────────
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="serial_io")
+        self._motor_state = "STOPPED"
+        self._oc_threshold = 10.0
         self._simulation = not _DRIVERS_AVAILABLE
 
     @classmethod
     def get_instance(cls) -> "DeviceManager":
-        with cls._lock:
+        with cls._class_lock:
             if cls._instance is None:
                 cls._instance = cls()
             return cls._instance
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    async def _run(self, fn, *args):
+        """Submit a blocking call to the serial executor without stalling the event loop."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._executor, fn, *args)
 
     # ── Properties ────────────────────────────────────────────────────────────
     @property
@@ -180,170 +216,167 @@ class DeviceManager:
     def simulation_mode(self) -> bool:
         return self._simulation
 
-    # ── Connect / Disconnect ───────────────────────────────────────────────────
+    # ── Connect / Disconnect ──────────────────────────────────────────────────
     async def connect_vfd(self, port: str, baud: int = 9600) -> dict:
-        loop = asyncio.get_event_loop()
-        async with self._bus_lock:
-            if self.vfd and self.vfd.ok:
-                self.vfd.disconnect()
-            cls = GD200A if _DRIVERS_AVAILABLE else _SimGD200A
-            vfd = cls(port, baud=baud)
-            ok = await loop.run_in_executor(None, vfd.connect)
-            if ok:
-                self.vfd = vfd
-                self._motor_state = "STOPPED"
-                logger.info(f"VFD connected on {port}")
-                return {"success": True, "port": port, "simulation": not _DRIVERS_AVAILABLE}
-            return {"success": False, "error": vfd.err}
+        cls = GD200A if _DRIVERS_AVAILABLE else _SimGD200A
+        vfd = cls(port, baud=baud)
+        ok = await self._run(vfd.connect)
+        if ok:
+            self.vfd = vfd
+            self._motor_state = "STOPPED"
+            logger.info("VFD connected on %s", port)
+            return {"success": True, "port": port, "simulation": not _DRIVERS_AVAILABLE}
+        return {"success": False, "error": getattr(vfd, "err", "Connection failed")}
 
     async def connect_pzem(self, port: str, baud: int = 9600) -> dict:
-        loop = asyncio.get_event_loop()
-        async with self._bus_lock:
-            if self.pzem and self.pzem.ok:
-                self.pzem.disconnect()
-            cls = PZEM004T if _DRIVERS_AVAILABLE else _SimPZEM
-            pzem = cls(port, baud=baud)
-            ok = await loop.run_in_executor(None, pzem.connect)
-            if ok:
-                self.pzem = pzem
-                logger.info(f"PZEM connected on {port}")
-                return {"success": True, "port": port, "simulation": not _DRIVERS_AVAILABLE}
-            return {"success": False, "error": getattr(pzem, "err", "Connection failed")}
+        cls = PZEM004T if _DRIVERS_AVAILABLE else _SimPZEM
+        pzem = cls(port, baud=baud)
+        ok = await self._run(pzem.connect)
+        if ok:
+            self.pzem = pzem
+            logger.info("PZEM connected on %s", port)
+            return {"success": True, "port": port, "simulation": not _DRIVERS_AVAILABLE}
+        return {"success": False, "error": getattr(pzem, "err", "Connection failed")}
 
     async def disconnect_all(self):
-        loop = asyncio.get_event_loop()
         if self.vfd:
-            await loop.run_in_executor(None, self.vfd.disconnect)
+            await self._run(self.vfd.disconnect)
             self.vfd = None
         if self.pzem:
-            await loop.run_in_executor(None, self.pzem.disconnect)
+            await self._run(self.pzem.disconnect)
             self.pzem = None
         self._motor_state = "STOPPED"
         logger.info("All devices disconnected")
 
     # ── Motor Commands ────────────────────────────────────────────────────────
-    async def _vfd_cmd(self, fn, *args):
-        """Run a VFD command in executor; guard against missing connection."""
+    async def run_forward(self, hz: float = None) -> dict:
         if not self.vfd_connected:
             return {"success": False, "error": "VFD not connected"}
-        loop = asyncio.get_event_loop()
-        async with self._bus_lock:
-            ok = await loop.run_in_executor(None, lambda: fn(*args))
-        return {"success": bool(ok), "error": "" if ok else self.vfd.err}
-
-    async def run_forward(self, hz: float = None) -> dict:
-        if hz is not None and hasattr(self.vfd, 'run_at_freq'):
-            res = await self._vfd_cmd(self.vfd.run_at_freq, hz)
+        if hz is not None and hasattr(self.vfd, "run_at_freq"):
+            ok = await self._run(self.vfd.run_at_freq, hz)
         else:
-            res = await self._vfd_cmd(self.vfd.run_forward)
-        if res["success"]:
+            ok = await self._run(self.vfd.run_forward)
+        if ok:
             self._motor_state = "FWD"
-        return res
+        return {"success": bool(ok), "error": "" if ok else getattr(self.vfd, "err", "")}
 
     async def run_reverse(self, hz: float = None) -> dict:
-        if hz is not None and hasattr(self.vfd, 'run_reverse_at_freq'):
-            res = await self._vfd_cmd(self.vfd.run_reverse_at_freq, hz)
+        if not self.vfd_connected:
+            return {"success": False, "error": "VFD not connected"}
+        if hz is not None and hasattr(self.vfd, "run_reverse_at_freq"):
+            ok = await self._run(self.vfd.run_reverse_at_freq, hz)
         else:
-            res = await self._vfd_cmd(self.vfd.run_reverse)
-        if res["success"]:
+            ok = await self._run(self.vfd.run_reverse)
+        if ok:
             self._motor_state = "REV"
-        return res
+        return {"success": bool(ok), "error": "" if ok else getattr(self.vfd, "err", "")}
 
     async def stop_motor(self) -> dict:
-        res = await self._vfd_cmd(self.vfd.stop)
-        if res["success"]:
+        if not self.vfd_connected:
+            return {"success": False, "error": "VFD not connected"}
+        ok = await self._run(self.vfd.stop)
+        if ok:
             self._motor_state = "STOPPED"
-        return res
+        return {"success": bool(ok), "error": "" if ok else getattr(self.vfd, "err", "")}
 
     async def estop_motor(self) -> dict:
-        res = await self._vfd_cmd(self.vfd.coast_stop)
-        if res["success"]:
+        if not self.vfd_connected:
+            return {"success": False, "error": "VFD not connected"}
+        ok = await self._run(self.vfd.coast_stop)
+        if ok:
             self._motor_state = "STOPPED"
-        return res
+        return {"success": bool(ok)}
 
     async def reset_fault(self) -> dict:
-        res = await self._vfd_cmd(self.vfd.reset_fault)
-        if res["success"]:
+        if not self.vfd_connected:
+            return {"success": False, "error": "VFD not connected"}
+        ok = await self._run(self.vfd.reset_fault)
+        if ok:
             self._motor_state = "STOPPED"
-        return res
+        return {"success": bool(ok)}
 
     async def set_frequency(self, hz: float) -> dict:
         if not self.vfd_connected:
             return {"success": False, "error": "VFD not connected"}
-        loop = asyncio.get_event_loop()
-        async with self._bus_lock:
-            ok = await loop.run_in_executor(
-                None,
-                lambda: self.vfd._wr(self.vfd.REG_FREQ_SET, int(hz * 100))
-                    if hasattr(self.vfd, "REG_FREQ_SET")
-                    else True   # sim mode
-            )
-        # For sim
-        if hasattr(self.vfd, "_freq"):
-            self.vfd._freq = hz
-        return {"success": True, "frequency_hz": hz}
 
-    # ── RPM conversion ─────────────────────────────────────────────────────────
+        def _do_set():
+            if hasattr(self.vfd, "REG_FREQ_SET"):
+                return self.vfd._wr(self.vfd.REG_FREQ_SET, int(hz * 100))
+            return True
+
+        ok = await self._run(_do_set)
+        if hasattr(self.vfd, "_freq"):   # keep sim in sync
+            self.vfd._freq = hz
+        return {"success": bool(ok), "frequency_hz": hz}
+
+    # ── RPM helper ────────────────────────────────────────────────────────────
     def rpm_to_hz(self, rpm: float) -> float:
-        if hasattr(self.vfd, 'rpm_to_hz'):
+        if hasattr(self.vfd, "rpm_to_hz"):
             return self.vfd.rpm_to_hz(rpm)
-        return (rpm * 4) / 120.0  # 4-pole default
+        return (rpm * 4) / 120.0
 
     # ── Live Readings ─────────────────────────────────────────────────────────
     async def read_monitor(self) -> dict:
-        loop = asyncio.get_event_loop()
+        """
+        All serial reads happen in one executor task — they are naturally
+        serialised by the single-worker pool.  The event loop is never blocked.
+        """
         result = {"timestamp": time.time(), "motor_state": self._motor_state}
 
-        # Perform ALL serial reads inside a single bus-lock acquisition
-        # to minimise Modbus transaction overhead and prevent UI lag.
-        if self.vfd_connected:
-            def _read_all_vfd():
-                """Runs in executor thread — does all VFD serial I/O in one go."""
-                mon = self.vfd.read_monitor()
-                if mon is None:
-                    return None, None, (0.0, 0.0)
+        vfd_connected  = self.vfd_connected
+        pzem_connected = self.pzem_connected
 
-                # Derive power (pure calculation, no serial)
-                pwr = self.vfd.read_power(mon) if hasattr(self.vfd, 'read_power') else None
+        def _read_all() -> dict:
+            """This runs in the serial_io thread — may take 200-500 ms, that's OK."""
+            out = {}
 
-                # Input voltage (1 extra Modbus read)
-                inp_v = self.vfd.read_input_voltage() if hasattr(self.vfd, 'read_input_voltage') else 0.0
+            if vfd_connected:
+                try:
+                    mon = self.vfd.read_monitor()
+                    if mon is not None:
+                        mon = _validate_vfd(mon)
 
-                # Proximity RPM (1 extra Modbus read)
-                prox = self.vfd.read_hdi_freq_rpm(1) if hasattr(self.vfd, 'read_hdi_freq_rpm') else (0.0, 0.0)
+                        if hasattr(self.vfd, "read_power"):
+                            pwr = self.vfd.read_power(mon)
+                            mon["power"]   = round(pwr.get("power", 0.0), 1)
+                            mon["pf"]      = round(pwr.get("pf", 0.0), 2)
+                            mon["voltage"] = pwr.get("voltage")
+                            mon["current"] = pwr.get("current")
 
-                return mon, pwr, inp_v, prox
+                        if hasattr(self.vfd, "read_input_voltage"):
+                            mon["inp_volt"] = self.vfd.read_input_voltage()
 
-            async with self._bus_lock:
-                vfd_result = await loop.run_in_executor(None, _read_all_vfd)
+                        if hasattr(self.vfd, "read_hdi_freq_rpm"):
+                            prox = self.vfd.read_hdi_freq_rpm(1)
+                            mon["prox_rpm"] = prox[0]
+                            mon["prox_hz"]  = prox[1]
 
-            if vfd_result[0] is not None:
-                mon, pwr, inp_v, prox = vfd_result
-                result["vfd"] = mon
+                        v = mon.get("out_volt", 0)
+                        mon["phase_r"] = v
+                        mon["phase_y"] = v
+                        mon["phase_b"] = v
+                        out["vfd"] = mon
+                    else:
+                        out["vfd"] = None
+                        out["vfd_error"] = getattr(self.vfd, "err", "Read failed")
+                except Exception as exc:
+                    logger.error("VFD read error: %s", exc)
+                    out["vfd"] = None
+                    out["vfd_error"] = str(exc)
 
-                if pwr:
-                    result["vfd"]["power"] = pwr["power"]
-                    result["vfd"]["pf"] = pwr["pf"]
-                    result["vfd"]["voltage"] = pwr["voltage"]
-                    result["vfd"]["current"] = pwr["current"]
+            if pzem_connected:
+                try:
+                    pzem_data = self.pzem.read_all()
+                    out["pzem"] = pzem_data
+                except Exception as exc:
+                    logger.error("PZEM read error: %s", exc)
+                    out["pzem"] = None
 
-                result["vfd"]["inp_volt"] = inp_v
-                result["vfd"]["prox_rpm"] = prox[0]
-                result["vfd"]["prox_hz"] = prox[1]
+            return out
 
-                # Three-phase voltages = VFD output voltage (balanced)
-                v = mon.get("out_volt", 0)
-                result["vfd"]["phase_r"] = v
-                result["vfd"]["phase_y"] = v
-                result["vfd"]["phase_b"] = v
-            else:
-                result["vfd"] = None
-                result["vfd_error"] = self.vfd.err if hasattr(self.vfd, "err") else "Read failed"
-
-        if self.pzem_connected:
-            async with self._bus_lock:
-                pzem = await loop.run_in_executor(None, self.pzem.read_all)
-            result["pzem"] = pzem
+        if vfd_connected or pzem_connected:
+            readings = await self._run(_read_all)
+            result.update(readings)
 
         return result
 

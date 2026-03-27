@@ -104,23 +104,27 @@ class _MaintenanceDashboardState extends State<MaintenanceDashboard> {
   }
 
   Widget _buildSummaryCards(bool isWide, bool isMedium, MaintenanceProvider p) {
-    int cols = isWide ? 4 : (isMedium ? 2 : 1);
+    final cols = isWide ? 4 : (isMedium ? 2 : 1);
     final count = p.machines.length;
     final atRisk = p.machines.where((m) => m['status'] != 'Active').length;
 
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: cols,
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: 1.85,
-      children: [
-        MetricTile(label: 'Total Machines', value: '$count', unit: 'UNITS', icon: Icons.precision_manufacturing_rounded, color: AppColors.primary),
-        MetricTile(label: 'At Risk', value: '$atRisk', unit: 'CRITICAL', icon: Icons.warning_amber_rounded, color: AppColors.accentRed),
-        const MetricTile(label: 'Active Alerts', value: '5', unit: 'OPEN', icon: Icons.notifications_active_rounded, color: AppColors.accentOrange),
-        const MetricTile(label: 'System Health', value: '94%', unit: 'SCORE', icon: Icons.health_and_safety_rounded, color: AppColors.accentGreen),
-      ],
+    final tiles = <Widget>[
+      MetricTile(label: 'Total Machines', value: '$count', unit: 'UNITS', icon: Icons.precision_manufacturing_rounded, color: AppColors.primary),
+      MetricTile(label: 'At Risk', value: '$atRisk', unit: 'CRITICAL', icon: Icons.warning_amber_rounded, color: AppColors.accentRed),
+      MetricTile(label: 'Healthy Assets', value: '${count - atRisk}', unit: 'STABLE', icon: Icons.check_circle_outline_rounded, color: AppColors.accentGreen),
+      MetricTile(label: 'System Health', value: '${count == 0 ? 100 : (100 - (atRisk / count * 100).toInt())}%', unit: 'SCORE', icon: Icons.health_and_safety_rounded, color: AppColors.accentGreen),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = 16.0;
+        final tileW = (constraints.maxWidth - (cols - 1) * gap) / cols;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: tiles.map((t) => SizedBox(width: tileW, child: t)).toList(),
+        );
+      },
     );
   }
 
@@ -172,12 +176,7 @@ class _MaintenanceDashboardState extends State<MaintenanceDashboard> {
               PieChartData(
                 sectionsSpace: 4,
                 centerSpaceRadius: 50,
-                sections: [
-                  PieChartSectionData(value: 65, color: AppColors.accentGreen, title: '65%', radius: 25, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  PieChartSectionData(value: 20, color: AppColors.accentAmber, title: '20%', radius: 25, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  PieChartSectionData(value: 10, color: AppColors.accentOrange, title: '10%', radius: 25, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  PieChartSectionData(value: 5, color: AppColors.accentRed, title: '5%', radius: 25, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                ],
+                sections: _buildPieSections(p),
               ),
             ),
           ),
@@ -189,6 +188,41 @@ class _MaintenanceDashboardState extends State<MaintenanceDashboard> {
         ],
       ),
     );
+  }
+
+  List<PieChartSectionData> _buildPieSections(MaintenanceProvider p) {
+    if (p.machines.isEmpty) {
+      return [PieChartSectionData(value: 1, color: Colors.white10, title: '', radius: 25)];
+    }
+    
+    final active = p.machines.where((m) => m['status'] == 'Active').length;
+    final warning = p.machines.where((m) => m['status'] == 'Warning').length;
+    final critical = p.machines.where((m) => m['status'] == 'Critical').length;
+    final total = p.machines.length;
+
+    return [
+      PieChartSectionData(
+        value: active.toDouble(),
+        color: AppColors.accentGreen,
+        title: '${(active / total * 100).toInt()}%',
+        radius: 25,
+        titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+      ),
+      PieChartSectionData(
+        value: warning.toDouble(),
+        color: AppColors.accentOrange,
+        title: '${(warning / total * 100).toInt()}%',
+        radius: 25,
+        titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+      ),
+      PieChartSectionData(
+        value: critical.toDouble(),
+        color: AppColors.accentRed,
+        title: '${(critical / total * 100).toInt()}%',
+        radius: 25,
+        titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+      ),
+    ];
   }
 
   Widget _buildLegendItem(String label, Color color) {

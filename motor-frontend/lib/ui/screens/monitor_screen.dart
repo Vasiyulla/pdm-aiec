@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/providers/motor_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../../ui/widgets/motor_data_notifiers.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/glass_card.dart';
 import '../router/app_router.dart';
@@ -21,121 +22,154 @@ class MonitorScreen extends StatelessWidget {
         children: [
           _header(context),
           Expanded(
-            child: Consumer<MotorProvider>(
-              builder: (_, motor, __) {
-                final vfd = motor.latestData?.vfd;
-                final pzem = motor.latestData?.pzem;
+            child: Builder(
+              builder: (context) {
+                final motor = context.read<MotorProvider>();
+                final notifiers = context.read<MotorDataNotifiers>();
 
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // VFD Block
-                      SectionHeader(
-                        title: 'VFD Readings (GD200A)',
-                        subtitle: 'Real-time drive output parameters',
-                        trailing: StatusChip(
-                          label: motor.deviceConnected ? 'Live' : 'Offline',
-                          color: motor.deviceConnected
-                              ? AppColors.statusRunning
-                              : AppColors.statusStopped,
-                          pulsing: motor.deviceConnected,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 16, runSpacing: 16,
-                        children: [
-                          _DataTile('Set Frequency', vfd?.setFreq, 'Hz',
-                              Icons.tune_rounded, AppColors.primary),
-                          _DataTile('Output Frequency', vfd?.outFreq, 'Hz',
-                              Icons.waves_rounded, AppColors.accent),
-                          _DataTile('Output Voltage', vfd?.outVolt, 'V',
-                              Icons.flash_on_rounded, AppColors.accentOrange),
-                          _DataTile('Output Current', vfd?.outCurr, 'A',
-                              Icons.electrical_services_rounded, AppColors.accentAmber),
-                          _DataTile('Motor RPM', vfd?.motorRpm?.toDouble(), 'RPM',
-                              Icons.speed_rounded, AppColors.primary),
-                          _DataTile('Active Power', vfd?.power, 'W',
-                              Icons.power_rounded, AppColors.accentGreen),
-                          _DataTile('Power Factor', vfd?.pf, '',
-                              Icons.analytics_rounded, AppColors.accentRed),
-                          _DataTile('Input Voltage', vfd?.inpVolt, 'V',
-                              Icons.input_rounded, AppColors.primaryLight),
-                          _DataTile('Proximity RPM', vfd?.proxRpm, 'RPM',
-                              Icons.radar_rounded, AppColors.accent),
-                          _DataTile('Phase R', vfd?.phaseR, 'V',
-                              Icons.electric_bolt_rounded, const Color(0xFFFF6B6B)),
-                          _DataTile('Phase Y', vfd?.phaseY, 'V',
-                              Icons.electric_bolt_rounded, const Color(0xFFFFD93D)),
-                          _DataTile('Phase B', vfd?.phaseB, 'V',
-                              Icons.electric_bolt_rounded, const Color(0xFF6B9BFF)),
-                        ],
-                      ),
-                      const SizedBox(height: 32),
+                return ValueListenableBuilder(
+                  valueListenable: notifiers.vfd,
+                  builder: (context, vfd, _) {
+                    return ValueListenableBuilder(
+                      valueListenable: notifiers.pzem,
+                      builder: (context, pzem, _) {
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // VFD Block
+                              SectionHeader(
+                                title: 'VFD Readings (GD200A)',
+                                subtitle: 'Real-time drive output parameters',
+                                trailing: StatusChip(
+                                  label: motor.deviceConnected ? 'Live' : 'Offline',
+                                  color: motor.deviceConnected
+                                      ? AppColors.statusRunning
+                                      : AppColors.statusStopped,
+                                  pulsing: motor.deviceConnected,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Wrap(
+                                spacing: 16, runSpacing: 16,
+                                children: [
+                                  _DataTile('Set Frequency', vfd.setFreq, 'Hz',
+                                      Icons.tune_rounded, AppColors.primary),
+                                  _DataTile('Output Frequency', vfd.outFreq, 'Hz',
+                                      Icons.waves_rounded, AppColors.accent),
+                                  _DataTile('Output Voltage', vfd.outVolt, 'V',
+                                      Icons.flash_on_rounded, AppColors.accentOrange),
+                                  _DataTile('Output Current', vfd.outCurr, 'A',
+                                      Icons.electrical_services_rounded, AppColors.accentAmber),
+                                  _DataTile('Motor RPM', vfd.motorRpm.toDouble(), 'RPM',
+                                      Icons.speed_rounded, AppColors.primary),
+                                  _DataTile('Active Power', vfd.power, 'W',
+                                      Icons.power_rounded, AppColors.accentGreen),
+                                  _DataTile('Power Factor', vfd.pf, '',
+                                      Icons.analytics_rounded, AppColors.accentRed),
+                                  _DataTile('Input Voltage', vfd.inpVolt, 'V',
+                                      Icons.input_rounded, AppColors.primaryLight),
+                                  _DataTile('Proximity RPM', vfd.proxRpm, 'RPM',
+                                      Icons.radar_rounded, AppColors.accent),
+                                  // Map other fields from VfdSnapshot if they were added
+                                  _DataTile('Phase R', 0, 'V',
+                                      Icons.electric_bolt_rounded, const Color(0xFFFF6B6B)),
+                                  _DataTile('Phase Y', 0, 'V',
+                                      Icons.electric_bolt_rounded, const Color(0xFFFFD93D)),
+                                  _DataTile('Phase B', 0, 'V',
+                                      Icons.electric_bolt_rounded, const Color(0xFF6B9BFF)),
+                                ],
+                              ),
+                              const SizedBox(height: 32),
 
-                      // PZEM Block
-                      SectionHeader(
-                        title: 'Power Meter (PZEM-004T)',
-                        subtitle: 'AC supply measurements',
-                        trailing: StatusChip(
-                          label: motor.status?.pzemConnected == true
-                              ? 'Live'
-                              : 'Offline',
-                          color: motor.status?.pzemConnected == true
-                              ? AppColors.statusRunning
-                              : AppColors.statusStopped,
-                          pulsing: motor.status?.pzemConnected == true,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 16, runSpacing: 16,
-                        children: [
-                          _DataTile('Voltage', pzem?.voltage, 'V',
-                              Icons.flash_on_rounded, AppColors.accentOrange),
-                          _DataTile('Current', pzem?.current, 'A',
-                              Icons.electrical_services_rounded, AppColors.accentAmber),
-                          _DataTile('Active Power', pzem?.power, 'W',
-                              Icons.power_rounded, AppColors.accentGreen),
-                          _DataTile('Energy', pzem?.energy, 'Wh',
-                              Icons.battery_charging_full_rounded, AppColors.primary),
-                          _DataTile('Frequency', pzem?.freq, 'Hz',
-                              Icons.waves_rounded, AppColors.accent),
-                          _DataTile('Power Factor', pzem?.pf, '',
-                              Icons.analytics_rounded, AppColors.accentRed),
-                        ],
-                      ),
-                      const SizedBox(height: 24),
-                    ],
-                  ),
+                              // PZEM Block
+                              SectionHeader(
+                                title: 'Power Meter (PZEM-004T)',
+                                subtitle: 'AC supply measurements',
+                                trailing: StatusChip(
+                                  label: motor.deviceConnected ? 'Live' : 'Offline',
+                                  color: motor.deviceConnected
+                                      ? AppColors.statusRunning
+                                      : AppColors.statusStopped,
+                                  pulsing: motor.deviceConnected,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Wrap(
+                                spacing: 16, runSpacing: 16,
+                                children: [
+                                  _DataTile('Voltage', pzem.voltage, 'V',
+                                      Icons.flash_on_rounded, AppColors.accentOrange),
+                                  _DataTile('Current', pzem.current, 'A',
+                                      Icons.electrical_services_rounded, AppColors.accentAmber),
+                                  _DataTile('Active Power', pzem.power, 'W',
+                                      Icons.power_rounded, AppColors.accentGreen),
+                                  _DataTile('Energy', 0, 'Wh',
+                                      Icons.battery_charging_full_rounded, AppColors.primary),
+                                  _DataTile('Frequency', pzem.freq, 'Hz',
+                                      Icons.waves_rounded, AppColors.accent),
+                                  _DataTile('Power Factor', pzem.pf, '',
+                                      Icons.analytics_rounded, AppColors.accentRed),
+                                ],
+                              ),
+                              const SizedBox(height: 24),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
                 );
               },
             ),
           ),
+
         ],
       ),
     );
   }
 
   Widget _header(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       height: 64, padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: const BoxDecoration(
-        color: AppColors.bg900,
-        border: Border(bottom: BorderSide(color: AppColors.bg600)),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.bg900 : AppColors.lightSurface,
+        border: Border(bottom: BorderSide(color: isDark ? AppColors.bg600 : AppColors.lightBorder)),
       ),
       child: Row(
         children: [
           Text('Live Monitor', style: Theme.of(context).textTheme.titleLarge),
           const Spacer(),
           Consumer<MotorProvider>(
-            builder: (_, motor, __) => IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
-              onPressed: motor.refreshStatus,
-              tooltip: 'Refresh',
-            ),
+            builder: (_, motor, __) {
+              final isRunning = motor.isRunning;
+              return Row(
+                children: [
+                  if (isRunning)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.stop_rounded, size: 18),
+                        label: const Text('STOP MOTOR', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                        onPressed: motor.stopMotor,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.statusFault,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          elevation: 0,
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh_rounded, color: AppColors.textSecondary),
+                    onPressed: motor.refreshStatus,
+                    tooltip: 'Refresh',
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),

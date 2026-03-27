@@ -48,6 +48,18 @@ class VfdData {
     phaseB: (j['phase_b'] as num?)?.toDouble(),
     source: j['source'] as String?,
   );
+
+  Map<String, dynamic> toJson() => {
+    'set_freq': setFreq,
+    'out_freq': outFreq,
+    'out_volt': outVolt,
+    'out_curr': outCurr,
+    'motor_rpm': motorRpm,
+    'power': power,
+    'pf': pf,
+    'inp_volt': inpVolt,
+    'source': source,
+  };
 }
 
 class PzemData {
@@ -71,6 +83,15 @@ class PzemData {
     freq: (j['freq'] as num?)?.toDouble(),
     pf: (j['pf'] as num?)?.toDouble(),
   );
+
+  Map<String, dynamic> toJson() => {
+    'voltage': voltage,
+    'current': current,
+    'power': power,
+    'energy': energy,
+    'freq': freq,
+    'pf': pf,
+  };
 }
 
 class MonitorData {

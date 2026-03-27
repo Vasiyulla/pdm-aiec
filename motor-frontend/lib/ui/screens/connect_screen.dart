@@ -180,7 +180,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                                               _vfdPortCtrl.text = v ?? ''),
                                           decoration: const InputDecoration(
                                             labelText: 'Select Port'),
-                                          dropdownColor: AppColors.bg700,
+                                          dropdownColor: Theme.of(context).brightness == Brightness.dark
+                                              ? AppColors.bg700
+                                              : AppColors.lightSurface,
                                         ),
                                       ),
                                     ],
@@ -198,7 +200,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                                     labelText: 'Baud Rate',
                                     prefixIcon: Icon(Icons.speed_rounded),
                                   ),
-                                  dropdownColor: AppColors.bg700,
+                                  dropdownColor: Theme.of(context).brightness == Brightness.dark
+                                      ? AppColors.bg700
+                                      : AppColors.lightSurface,
                                 ),
                               ],
                             ],
@@ -244,7 +248,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                                     labelText: 'Baud Rate',
                                     prefixIcon: Icon(Icons.speed_rounded),
                                   ),
-                                  dropdownColor: AppColors.bg700,
+                                  dropdownColor: Theme.of(context).brightness == Brightness.dark
+                                      ? AppColors.bg700
+                                      : AppColors.lightSurface,
                                 ),
                               ],
                             ],
@@ -346,10 +352,16 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   Widget _pageHeader(BuildContext context) {
     return Container(
-      height: 64, padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: const BoxDecoration(
-        color: AppColors.bg900,
-        border: Border(bottom: BorderSide(color: AppColors.bg600)),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? AppColors.bg900
+            : AppColors.lightSurface,
+        border: Border(bottom: BorderSide(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? AppColors.bg600
+                : AppColors.lightBorder,
+            width: 0.5)),
       ),
       child: Row(
         children: [

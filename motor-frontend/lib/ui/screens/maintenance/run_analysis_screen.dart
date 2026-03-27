@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:motor_frontend/core/providers/maintenance_provider.dart';
+import 'package:motor_frontend/core/providers/motor_provider.dart';
 import 'package:motor_frontend/core/theme/app_theme.dart';
 import 'package:motor_frontend/ui/widgets/app_shell.dart';
 import 'package:motor_frontend/ui/widgets/glass_card.dart';
@@ -21,6 +22,26 @@ class _RunAnalysisScreenState extends State<RunAnalysisScreen> {
   final _pressController = TextEditingController();
   final _rpmController = TextEditingController();
   String _machineId = "M-001";
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoPopulate();
+    });
+  }
+
+  void _autoPopulate() {
+    final motor = context.read<MotorProvider>();
+    final vfd = motor.latestData?.vfd;
+    
+    if (vfd != null) {
+      if (vfd.motorRpm != null) _rpmController.text = vfd.motorRpm.toString();
+      // Assume temp is available in some vfd field or null
+      // if (vfd.temp != null) _tempController.text = vfd.temp.toString();
+      setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -55,18 +76,28 @@ class _RunAnalysisScreenState extends State<RunAnalysisScreen> {
   }
 
   Widget _buildHeader(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text('Run AI Analysis',
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                )),
-        const Text('Input live sensor readings for failure risk assessment',
-            style: TextStyle(
-                  color: AppColors.textSecondary,
-                )),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Run AI Analysis',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    )),
+            const Text('Input live sensor readings for failure risk assessment',
+                style: TextStyle(
+                      color: AppColors.textSecondary,
+                    )),
+          ],
+        ),
+        IconButton(
+          onPressed: _autoPopulate,
+          icon: const Icon(Icons.refresh_rounded, color: AppColors.primary),
+          tooltip: 'Sync Live Data',
+        ),
       ],
     );
   }
@@ -87,10 +118,10 @@ class _RunAnalysisScreenState extends State<RunAnalysisScreen> {
               onChanged: (v) => setState(() => _machineId = v!),
             ),
             const SizedBox(height: 16),
-             _buildTextField(_tempController, 'Temperature (°C)', Icons.thermostat_rounded),
-             _buildTextField(_vibController, 'Vibration (mm/s)', Icons.vibration_rounded),
-             _buildTextField(_pressController, 'Pressure (Bar)', Icons.compress_rounded),
-             _buildTextField(_rpmController, 'Motor Speed (RPM)', Icons.speed_rounded),
+             _buildTextField(_tempController, 'Temperature (°C)', Icons.thermostat_rounded, isLive: false),
+             _buildTextField(_vibController, 'Vibration (mm/s)', Icons.vibration_rounded, isLive: false),
+             _buildTextField(_pressController, 'Pressure (Bar)', Icons.compress_rounded, isLive: false),
+             _buildTextField(_rpmController, 'Motor Speed (RPM)', Icons.speed_rounded, isLive: true),
              const SizedBox(height: 24),
              PremiumButton(
                label: 'Analyze Health',
@@ -106,18 +137,54 @@ class _RunAnalysisScreenState extends State<RunAnalysisScreen> {
     );
   }
 
-  Widget _buildTextField(TextEditingController ctrl, String label, IconData icon) {
+  Widget _buildTextField(TextEditingController ctrl, String label, IconData icon, {bool isLive = false}) {
+    final hasVal = ctrl.text.isNotEmpty;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: TextFormField(
-        controller: ctrl,
-        decoration: InputDecoration(
-          labelText: label,
-          prefixIcon: Icon(icon, color: AppColors.primary),
-        ),
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 14, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+              const Spacer(),
+              if (isLive && hasVal)
+                _badge('● Live', AppColors.accentGreen)
+              else if (isLive && !hasVal)
+                _badge('● Attempting Live Read', AppColors.accentAmber)
+              else
+                _badge('Manual Entry', AppColors.textMuted),
+            ],
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrl,
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _badge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Text(text, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold)),
     );
   }
 

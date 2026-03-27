@@ -1,72 +1,147 @@
-// ============================================================
-//  motor_provider.dart  —  Motor state + live data management
-// ============================================================
+// motor_provider_v3.dart
+// ======================
+// MotorProvider now has TWO responsibilities:
+//
+//   1. Commands (start/stop/connect/disconnect) — still uses ChangeNotifier
+//      because these are infrequent and it's fine to rebuild the button bar.
+//
+//   2. Live data — delegated entirely to MotorDataNotifiers (ValueNotifier).
+//      _onMonitorData() never calls notifyListeners(). It pushes to individual
+//      ValueNotifiers so only the affected gauge/chart/card rebuilds.
+//
+// This means GestureDetector, AppBar, NavBar, buttons — anything that isn't
+// directly displaying live sensor data — are NEVER rebuilt during monitoring.
+// Mouse events and tap responses become instant.
+//
+// SETUP in main.dart / app root:
+//   MultiProvider(
+//     providers: [
+//       Provider(create: (_) => MotorDataNotifiers()),
+//       ChangeNotifierProvider(create: (ctx) => MotorProvider(
+//         apiService,
+//         websocketService,
+//         ctx.read<MotorDataNotifiers>(),
+//       )),
+//     ],
+//   )
+//
+// USAGE in a gauge widget:
+//   ValueListenableBuilder<VfdSnapshot>(
+//     valueListenable: context.read<MotorDataNotifiers>().vfd,
+//     builder: (_, snap, __) => Text('${snap.motorRpm} RPM'),
+//   )
+//
+// USAGE in a button:
+//   Consumer<MotorProvider>(
+//     builder: (_, mp, __) => ElevatedButton(
+//       onPressed: mp.motorCommand == 'idle' ? () => mp.startMotor() : null,
+//       child: Text(mp.motorCommand == 'idle' ? 'Start' : 'Starting…'),
+//     ),
+//   )
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../models/motor_models.dart';
+import '../../ui/widgets/motor_data_notifiers.dart';
+
+const _kAlertDebounce = Duration(milliseconds: 3000);
+const _kStateThrottle = Duration(milliseconds: 500);
 
 class MotorProvider extends ChangeNotifier {
   final ApiService _api;
   final WebSocketService _ws;
+  final MotorDataNotifiers _notifiers;
 
-  MonitorData? _latestData;
   DeviceStatus? _status;
-  List<AlertModel> _activeAlerts = [];
   List<Map<String, dynamic>> _eventLogs = [];
   List<Map<String, dynamic>> _history = [];
 
-  // Chart data ring buffers (last 60 samples)
-  final List<double> rpmHistory = [];
-  final List<double> currentHistory = [];
-  final List<double> freqHistory = [];
-  final List<double> powerHistory = [];
-  final List<double> torqueHistory = [];
-  static const _maxSamples = 60;
-
-  // Weight-based load analysis (S1 = loaded, S2 = tare)
-  double _s1 = 0.0; // kg (spring balance 1)
-  double _s2 = 0.0; // kg (spring balance 2)
-  final List<Map<String, double>> powerVsWeight = []; // [{weight, power, torque}]
-
   bool _connected = false;
   bool _loading = false;
-  String? _errorMsg;
-  String _motorCommand = 'idle'; // idle | starting | stopping
+  String _motorCommand = 'idle';
 
-  StreamSubscription? _monitorSub;
-  StreamSubscription? _alertSub;
-  Timer? _statusTimer;
+  // Weight analysis
+  double _s1 = 0.0;
+  double _s2 = 0.0;
+  final List<Map<String, double>> powerVsWeight = [];
+  static const _kMaxWeightPoints = 200;
 
-  MotorProvider(this._api, this._ws) {
+  DateTime _lastAlertLoad = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastStateNotify = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _statusRefreshTimer;
+  Timer? _statusPollTimer;
+
+  MotorProvider(this._api, this._ws, this._notifiers) {
     _ws.monitorStream.listen(_onMonitorData);
     _ws.alertStream.listen(_onAlert);
   }
 
-  // ── Getters ──────────────────────────────────────────────────────
-  MonitorData? get latestData => _latestData;
+  // ── Getters ──────────────────────────────────────────────────────────────
+  // Commands and connection state only — widgets needing live data use
+  // MotorDataNotifiers directly.
   DeviceStatus? get status => _status;
-  List<AlertModel> get activeAlerts => _activeAlerts;
-  List<Map<String, dynamic>> get eventLogs => _eventLogs;
-  List<Map<String, dynamic>> get history => _history;
   bool get connected => _connected;
   bool get deviceConnected => _status?.vfdConnected ?? false;
   bool get loading => _loading;
-  String? get errorMsg => _errorMsg;
-  String get motorCommand => _motorCommand; // 'idle' | 'starting' | 'stopping'
+  String get motorCommand => _motorCommand;
   double get s1 => _s1;
   double get s2 => _s2;
-  double get weight => (_s1 - _s2).abs(); // net load in kg
-  String get motorState => _latestData?.motorState ?? _status?.motorState ?? 'STOPPED';
+  double get weight => (_s1 - _s2).abs();
   WsState get wsState => _ws.state;
   ApiService get api => _api;
+  List<Map<String, dynamic>> get eventLogs => _eventLogs;
+  List<Map<String, dynamic>> get history => _history;
 
-  bool get isRunning =>
-      motorState == 'FWD' || motorState == 'REV';
+  String get motorState => _notifiers.motorState.value.state;
 
-  // ── Backend URL ──────────────────────────────────────────────────
+  bool get isRunning => motorState == 'FWD' || motorState == 'REV';
+  List<AlertModel> get activeAlerts => _notifiers.alerts.value;
+  String? get errorMsg => _notifiers.errorMsg.value;
+
+  // ── Compatibility Getters (Proxy to Notifiers) ──────────────────────────
+  // Note: These do NOT trigger rebuilds via notifyListeners().
+  // UI screens should use ValueListenableBuilder<VfdSnapshot> etc. for live updates.
+  VfdSnapshot get vfd => _notifiers.vfd.value;
+  PzemSnapshot get pzem => _notifiers.pzem.value;
+  ChartSnapshot get chartData => _notifiers.charts.value;
+
+  List<double> get rpmHistory => chartData.rpm;
+  List<double> get torqueHistory => chartData.torque;
+  List<double> get freqHistory => chartData.freq;
+  List<double> get powerHistory => chartData.power;
+  List<double> get currentHistory => chartData.current;
+
+  // Recreate MonitorData for legacy screen compatibility
+  MonitorData? get latestData {
+    final v = vfd;
+    final p = pzem;
+    return MonitorData(
+      timestamp: DateTime.now().millisecondsSinceEpoch / 1000.0,
+      motorState: motorState,
+      vfd: VfdData(
+        motorRpm: v.motorRpm,
+        outFreq: v.outFreq,
+        outVolt: v.outVolt,
+        outCurr: v.outCurr,
+        power: v.power,
+        pf: v.pf,
+        inpVolt: v.inpVolt,
+        proxRpm: v.proxRpm,
+      ),
+      pzem: PzemData(
+        voltage: p.voltage,
+        current: p.current,
+        power: p.power,
+        freq: p.freq,
+        pf: p.pf,
+      ),
+    );
+  }
+
+
+  // ── Server URL ────────────────────────────────────────────────────────────
   void setServerUrl(String url) {
     _api.setBaseUrl(url);
     _ws.setBase(url);
@@ -74,7 +149,7 @@ class MotorProvider extends ChangeNotifier {
 
   String get serverUrl => _api.baseUrl;
 
-  // ── Device Connect / Disconnect ─────────────────────────────────
+  // ── Device Connect / Disconnect ─────────────────────────────────────────
   Future<bool> connectDevices({
     String? vfdPort,
     String? pzemPort,
@@ -85,8 +160,10 @@ class MotorProvider extends ChangeNotifier {
     _setLoading(true);
     try {
       final res = await _api.connect(
-        vfdPort: vfdPort, pzemPort: pzemPort,
-        vfdBaud: vfdBaud, pzemBaud: pzemBaud,
+        vfdPort: vfdPort,
+        pzemPort: pzemPort,
+        vfdBaud: vfdBaud,
+        pzemBaud: pzemBaud,
         simulate: simulate,
       );
       if (res['success'] == true) {
@@ -94,14 +171,20 @@ class MotorProvider extends ChangeNotifier {
         _ws.connect();
         _startStatusPoll();
         _connected = true;
+        _notifiers.motorState.value = MotorStateSnapshot(
+          state: 'STOPPED',
+          command: 'idle',
+          connected: true,
+          deviceConnected: deviceConnected,
+        );
         _setLoading(false);
         return true;
       }
-      _errorMsg = res['error'] ?? res['message'] ?? 'Connection failed';
+      _notifiers.errorMsg.value = res['error'] ?? 'Connection failed';
       _setLoading(false);
       return false;
     } catch (e) {
-      _errorMsg = e.toString();
+      _notifiers.errorMsg.value = e.toString();
       _setLoading(false);
       return false;
     }
@@ -114,47 +197,43 @@ class MotorProvider extends ChangeNotifier {
       _ws.disconnect();
       _stopStatusPoll();
       _connected = false;
-      _latestData = null;
+      _notifiers.motorState.value = const MotorStateSnapshot();
     } catch (_) {}
     _setLoading(false);
   }
 
-  // ── Motor Commands ───────────────────────────────────────────────
+  // ── Motor Commands ────────────────────────────────────────────────────────
   Future<Map<String, dynamic>> startMotor({
     String direction = 'forward',
     double? frequency,
     double? targetRpm,
   }) async {
-    _motorCommand = 'starting';
-    notifyListeners();
+    _setMotorCommand('starting');
     try {
       final res = await _api.startMotor(
-        direction: direction, frequency: frequency, targetRpm: targetRpm,
+        direction: direction,
+        frequency: frequency,
+        targetRpm: targetRpm,
       );
-      await refreshStatus();
-      _motorCommand = 'idle';
-      notifyListeners();
+      _setMotorCommand('idle');
+      _scheduleStatusRefresh();
       return res;
     } catch (e) {
-      _motorCommand = 'idle';
-      _errorMsg = e.toString();
-      notifyListeners();
+      _setMotorCommand('idle');
+      _notifiers.errorMsg.value = e.toString();
       return {'success': false, 'error': e.toString()};
     }
   }
 
   Future<Map<String, dynamic>> stopMotor() async {
-    _motorCommand = 'stopping';
-    notifyListeners();
+    _setMotorCommand('stopping');
     try {
       final res = await _api.stopMotor();
-      await refreshStatus();
-      _motorCommand = 'idle';
-      notifyListeners();
+      _setMotorCommand('idle');
+      _scheduleStatusRefresh();
       return res;
     } catch (e) {
-      _motorCommand = 'idle';
-      notifyListeners();
+      _setMotorCommand('idle');
       return {'success': false, 'error': e.toString()};
     }
   }
@@ -162,8 +241,7 @@ class MotorProvider extends ChangeNotifier {
   Future<Map<String, dynamic>> eStop() async {
     try {
       final res = await _api.eStop();
-      await refreshStatus();
-      notifyListeners();
+      _scheduleStatusRefresh(delay: const Duration(milliseconds: 300));
       return res;
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -173,8 +251,7 @@ class MotorProvider extends ChangeNotifier {
   Future<Map<String, dynamic>> resetFault() async {
     try {
       final res = await _api.resetFault();
-      await refreshStatus();
-      notifyListeners();
+      _scheduleStatusRefresh();
       return res;
     } catch (e) {
       return {'success': false, 'error': e.toString()};
@@ -183,18 +260,23 @@ class MotorProvider extends ChangeNotifier {
 
   Future<Map<String, dynamic>> setFrequency(double hz) async {
     try {
-      final res = await _api.setFrequency(hz);
-      notifyListeners();
-      return res;
+      return await _api.setFrequency(hz);
     } catch (e) {
       return {'success': false, 'error': e.toString()};
     }
   }
 
-  // ── Data Refresh ─────────────────────────────────────────────────
+  // ── Data Refresh ─────────────────────────────────────────────────────────
   Future<void> refreshStatus() async {
     try {
       _status = await _api.getStatus();
+      // Update motorState notifier (affects status card, not gauges)
+      _notifiers.motorState.value = MotorStateSnapshot(
+        state: _status?.motorState ?? 'STOPPED',
+        command: _motorCommand,
+        connected: _connected,
+        deviceConnected: _status?.vfdConnected ?? false,
+      );
       notifyListeners();
     } catch (_) {}
   }
@@ -202,11 +284,10 @@ class MotorProvider extends ChangeNotifier {
   Future<void> loadAlerts() async {
     try {
       final data = await _api.getAlerts();
-      final active = (data['active'] as List<dynamic>? ?? [])
+      final list = (data['active'] as List<dynamic>? ?? [])
           .map((a) => AlertModel.fromJson(a as Map<String, dynamic>))
           .toList();
-      _activeAlerts = active;
-      notifyListeners();
+      _notifiers.alerts.value = list;
     } catch (_) {}
   }
 
@@ -229,49 +310,43 @@ class MotorProvider extends ChangeNotifier {
     await loadAlerts();
   }
 
-  // ── Internals ─────────────────────────────────────────────────────
-  DateTime _lastNotify = DateTime.now();
-  static const _notifyThrottle = Duration(milliseconds: 600);
-
+  // ── Hot path — NEVER calls notifyListeners() ─────────────────────────────
   void _onMonitorData(MonitorData data) {
-    final oldState = _latestData?.motorState;
-    _latestData = data;
-    _appendHistory(data);
-    
-    // Throttle UI updates for raw data to prevent lag
+    // Push to fine-grained ValueNotifiers only.
+    // ChangeNotifier listeners (buttons, app bar) are never woken here.
+    _notifiers.updateFromMonitor(data);
+
+    // Update motorState notifier if state changed (cheap string compare)
+    final prev = _notifiers.motorState.value.state;
+    if (data.motorState != prev) {
+      _notifiers.motorState.value = MotorStateSnapshot(
+        state: data.motorState,
+        command: _motorCommand,
+        connected: _connected,
+        deviceConnected: deviceConnected,
+      );
+      // State change warrants notifying command consumers (button bar etc.)
+      final now = DateTime.now();
+      if (now.difference(_lastStateNotify) > _kStateThrottle) {
+        _lastStateNotify = now;
+        notifyListeners();
+      }
+    }
+  }
+
+  void _onAlert(Map<String, dynamic> alert) {
+    // Debounce the HTTP fetch; always update the badge immediately.
     final now = DateTime.now();
-    if (now.difference(_lastNotify) > _notifyThrottle || 
-        data.motorState != oldState) {
-      _lastNotify = now;
-      notifyListeners();
+    if (now.difference(_lastAlertLoad) >= _kAlertDebounce) {
+      _lastAlertLoad = now;
+      loadAlerts();
     }
+    // Notify for alert badge — this rebuilds the alert count widget only,
+    // not the live data gauges, because those use ValueListenableBuilder.
+    notifyListeners();
   }
 
-  void _appendHistory(MonitorData data) {
-    void add(List<double> buf, double? v) {
-      if (v == null) return;
-      buf.add(v);
-      if (buf.length > _maxSamples) buf.removeAt(0);
-    }
-
-    add(rpmHistory, data.vfd?.motorRpm?.toDouble());
-    add(currentHistory, data.vfd?.outCurr ?? data.pzem?.current);
-    add(freqHistory, data.vfd?.outFreq);
-    add(powerHistory, data.vfd?.power ?? data.pzem?.power);
-
-    // Calculate torque: T = P / ω   where ω = 2π × RPM / 60
-    final rpm = data.vfd?.motorRpm?.toDouble() ?? 0;
-    final power = data.vfd?.power ?? data.pzem?.power ?? 0;
-    if (rpm > 1) {
-      final omega = 2 * 3.14159265 * rpm / 60.0;
-      final torque = power / omega;
-      add(torqueHistory, torque);
-    } else {
-      add(torqueHistory, 0.0);
-    }
-  }
-
-  // ── Weight / load analysis ──────────────────────────────────────────
+  // ── Weight analysis ───────────────────────────────────────────────────────
   void setS1(double kg) {
     _s1 = kg;
     notifyListeners();
@@ -282,20 +357,14 @@ class MotorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Record current power & torque at the current weight setting
   void recordWeightDataPoint() {
-    final power = _latestData?.vfd?.power ?? _latestData?.pzem?.power ?? 0;
-    final rpm = _latestData?.vfd?.motorRpm?.toDouble() ?? 0;
+    if (powerVsWeight.length >= _kMaxWeightPoints) powerVsWeight.removeAt(0);
+    final snap = _notifiers.vfd.value;
+    final power = snap.power;
+    final rpm = snap.motorRpm.toDouble();
     double torque = 0;
-    if (rpm > 1) {
-      final omega = 2 * 3.14159265 * rpm / 60.0;
-      torque = power / omega;
-    }
-    powerVsWeight.add({
-      'weight': weight,
-      'power': power.toDouble(),
-      'torque': torque,
-    });
+    if (rpm > 10) torque = power / (2 * 3.14159265 * rpm / 60.0);
+    powerVsWeight.add({'weight': weight, 'power': power, 'torque': torque});
     notifyListeners();
   }
 
@@ -304,21 +373,20 @@ class MotorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _onAlert(Map<String, dynamic> alert) {
-    loadAlerts();
-    notifyListeners(); // Always notify on new alerts
+  void clearError() {
+    _notifiers.errorMsg.value = null;
   }
 
-  void _startStatusPoll() {
-    _statusTimer?.cancel();
-    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      refreshStatus();
-    });
-  }
-
-  void _stopStatusPoll() {
-    _statusTimer?.cancel();
-    _statusTimer = null;
+  // ── Internals ─────────────────────────────────────────────────────────────
+  void _setMotorCommand(String cmd) {
+    _motorCommand = cmd;
+    _notifiers.motorState.value = MotorStateSnapshot(
+      state: _notifiers.motorState.value.state,
+      command: cmd,
+      connected: _connected,
+      deviceConnected: deviceConnected,
+    );
+    notifyListeners(); // command state change → button bar rebuilds
   }
 
   void _setLoading(bool v) {
@@ -326,15 +394,26 @@ class MotorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void clearError() {
-    _errorMsg = null;
-    notifyListeners();
+  void _scheduleStatusRefresh(
+      {Duration delay = const Duration(milliseconds: 1500)}) {
+    _statusRefreshTimer?.cancel();
+    _statusRefreshTimer = Timer(delay, refreshStatus);
+  }
+
+  void _startStatusPoll() {
+    _statusPollTimer?.cancel();
+    _statusPollTimer =
+        Timer.periodic(const Duration(seconds: 5), (_) => refreshStatus());
+  }
+
+  void _stopStatusPoll() {
+    _statusPollTimer?.cancel();
+    _statusPollTimer = null;
   }
 
   @override
   void dispose() {
-    _monitorSub?.cancel();
-    _alertSub?.cancel();
+    _statusRefreshTimer?.cancel();
     _stopStatusPoll();
     _ws.dispose();
     super.dispose();
