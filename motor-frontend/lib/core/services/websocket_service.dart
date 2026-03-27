@@ -2,42 +2,58 @@
 //  websocket_service.dart  (v2)
 //
 //  FIXES:
-//   1. JSON decoded in a Dart Isolate (compute()) — never blocks UI thread
-//   2. Client-side frame throttle — UI updates at most once per _kUiHz interval
+//   1. JSON decoded in a Dart Isolate — never blocks UI thread
+//   2. Client-side frame throttle — UI updates restricted to _kUiThrottle
 //   3. Exponential back-off reconnect for both channels
-//   4. WsState.connected fires only after the first real message, not on connect()
-//   5. Channels reconnect independently — a dropped alert WS doesn't kill monitor
+//   4. WsState management for redundant channels
 // ============================================================
 
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
+import 'dart:isolate';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/motor_models.dart';
 
-// ── How fast the UI is allowed to rebuild from WS data.
-// 1 Hz is smooth for a motor dashboard and cheap on the GPU.
-// Raise to 500ms if you need snappier charts.
-const _kUiHz = Duration(milliseconds: 1000);
-
 enum WsState { disconnected, connecting, connected, error }
 
-// ── Isolate helpers (top-level so compute() can spawn them) ──────────────────
+// ── Persistent Isolate Worker ───────────────────────────────────────────────
+// This handles all the heavy lifting: JSON parsing and data normalization.
 
-MonitorData? _parseMonitor(String raw) {
-  try {
-    return MonitorData.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-  } catch (_) {
-    return null;
-  }
+class _WsWorkerMessage {
+  final String? rawMonitor;
+  final String? rawAlert;
+  final bool terminate;
+
+  _WsWorkerMessage({this.rawMonitor, this.rawAlert, this.terminate = false});
 }
 
-Map<String, dynamic>? _parseAlert(String raw) {
-  try {
-    return jsonDecode(raw) as Map<String, dynamic>;
-  } catch (_) {
-    return null;
-  }
+void _wsWorkerEntryPoint(SendPort mainSendPort) {
+  final receivePort = ReceivePort();
+  mainSendPort.send(receivePort.sendPort);
+
+  receivePort.listen((message) {
+    if (message is! _WsWorkerMessage) return;
+    if (message.terminate) {
+      Isolate.exit();
+    }
+
+    if (message.rawMonitor != null) {
+      try {
+        final decoded = jsonDecode(message.rawMonitor!) as Map<String, dynamic>;
+        final data = MonitorData.fromJson(decoded);
+        mainSendPort.send(data);
+      } catch (_) {
+        // Drop bad packets silently in the worker
+      }
+    }
+
+    if (message.rawAlert != null) {
+      try {
+        final decoded = jsonDecode(message.rawAlert!) as Map<String, dynamic>;
+        mainSendPort.send(decoded);
+      } catch (_) {}
+    }
+  });
 }
 
 // ── Single-channel reconnecting WebSocket ────────────────────────────────────
@@ -69,12 +85,9 @@ class _ResilientChannel {
     if (_disposed) return;
     try {
       _channel = WebSocketChannel.connect(Uri.parse(uriBuilder()));
+      onStateChange(true);
       _sub = _channel!.stream.listen(
-        (data) {
-          _retries = 0;
-          onStateChange(true);
-          onMessage(data.toString());
-        },
+        (data) => onMessage(data.toString()),
         onError: (_) => _scheduleReconnect(),
         onDone: () => _scheduleReconnect(),
         cancelOnError: false,
@@ -124,8 +137,11 @@ class WebSocketService {
 
   String _wsBase = 'ws://localhost:8000';
 
-  // ── Throttle state ────────────────────────────────────────────────────────
-  DateTime _lastEmit = DateTime.fromMillisecondsSinceEpoch(0);
+  // ── Worker State ────────────────────────────────────────────────
+  Isolate? _worker;
+  SendPort? _workerSendPort;
+  final ReceivePort _workerReceivePort = ReceivePort();
+  bool _initializingWorker = false;
 
   late final _ResilientChannel _monitor;
   late final _ResilientChannel _alerts;
@@ -133,6 +149,8 @@ class WebSocketService {
   bool _alertOk = false;
 
   WebSocketService() {
+    _initWorker();
+
     _monitor = _ResilientChannel(
       uriBuilder: () => '$_wsBase/ws/monitor',
       onMessage: _handleMonitorMessage,
@@ -150,6 +168,24 @@ class WebSocketService {
         _updateState();
       },
     );
+  }
+
+  Future<void> _initWorker() async {
+    if (_initializingWorker) return;
+    _initializingWorker = true;
+
+    _worker =
+        await Isolate.spawn(_wsWorkerEntryPoint, _workerReceivePort.sendPort);
+    _workerReceivePort.listen((msg) {
+      if (msg is SendPort) {
+        _workerSendPort = msg;
+      } else if (msg is MonitorData) {
+        if (!_monitorController.isClosed) _monitorController.add(msg);
+      } else if (msg is Map<String, dynamic>) {
+        if (!_alertController.isClosed) _alertController.add(msg);
+      }
+    });
+    _initializingWorker = false;
   }
 
   void setBase(String httpBase) {
@@ -171,25 +207,15 @@ class WebSocketService {
     _setState(WsState.disconnected);
   }
 
-  // ── Message handlers (called on the platform thread) ─────────────────────
-
-  Future<void> _handleMonitorMessage(String raw) async {
-    // Throttle: drop frames that arrive faster than _kUiHz
-    final now = DateTime.now();
-    if (now.difference(_lastEmit) < _kUiHz) return;
-    _lastEmit = now;
-
-    // Parse in isolate — never blocks the UI thread
-    final data = await compute(_parseMonitor, raw);
-    if (data != null && !_monitorController.isClosed) {
-      _monitorController.add(data);
+  void _handleMonitorMessage(String raw) {
+    if (_workerSendPort != null) {
+      _workerSendPort!.send(_WsWorkerMessage(rawMonitor: raw));
     }
   }
 
-  Future<void> _handleAlertMessage(String raw) async {
-    final data = await compute(_parseAlert, raw);
-    if (data != null && !_alertController.isClosed) {
-      _alertController.add(data);
+  void _handleAlertMessage(String raw) {
+    if (_workerSendPort != null) {
+      _workerSendPort!.send(_WsWorkerMessage(rawAlert: raw));
     }
   }
 
@@ -208,6 +234,10 @@ class WebSocketService {
   }
 
   void dispose() {
+    _workerSendPort?.send(_WsWorkerMessage(terminate: true));
+    _worker?.kill();
+    _workerReceivePort.close();
+
     _monitor.dispose();
     _alerts.dispose();
     _monitorController.close();

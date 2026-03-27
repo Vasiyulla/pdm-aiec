@@ -5,13 +5,17 @@ import 'package:provider/provider.dart';
 import 'package:motor_frontend/core/theme/app_theme.dart';
 import 'package:motor_frontend/core/services/auth_service.dart';
 import 'package:motor_frontend/core/services/api_service.dart';
-import 'package:motor_frontend/core/services/websocket_service.dart';
+import 'package:motor_frontend/core/services/motor_ws_isolate.dart';
 import 'package:motor_frontend/core/providers/motor_provider.dart';
 import 'package:motor_frontend/ui/widgets/motor_data_notifiers.dart';
 import 'package:motor_frontend/core/providers/auth_provider.dart';
 import 'package:motor_frontend/core/providers/theme_provider.dart';
 import 'package:motor_frontend/core/providers/maintenance_provider.dart';
 import 'package:motor_frontend/ui/router/app_router.dart';
+
+final _notifiers = MotorDataNotifiers();
+final _bridge = MotorWsIsolateBridge();
+// Don't start the isolate yet — start it when user connects to a server.
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,13 +37,10 @@ class MotorDashboardApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider(AuthService())),
-        Provider<MotorDataNotifiers>(create: (_) => MotorDataNotifiers()),
+        Provider<MotorDataNotifiers>.value(value: _notifiers),
+        Provider<MotorWsIsolateBridge>.value(value: _bridge),
         ChangeNotifierProvider(
-          create: (ctx) => MotorProvider(
-            ApiService(),
-            WebSocketService(),
-            ctx.read<MotorDataNotifiers>(),
-          ),
+          create: (_) => MotorProvider(ApiService(), _bridge, _notifiers),
         ),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
         ChangeNotifierProvider(create: (_) => MaintenanceProvider()),

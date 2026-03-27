@@ -13,10 +13,15 @@ class AriaChatbot extends StatefulWidget {
   State<AriaChatbot> createState() => _AriaChatbotState();
 }
 
-class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStateMixin {
+class _AriaChatbotState extends State<AriaChatbot>
+    with SingleTickerProviderStateMixin {
   bool _isExpanded = false;
   final List<Map<String, String>> _messages = [
-    {"role": "aria", "content": "Hello! I'm ARIA. How can I assist you with the motor systems today?"}
+    {
+      "role": "aria",
+      "content":
+          "Hello! I'm ARIA. How can I assist you with the motor systems today?"
+    }
   ];
   final TextEditingController _msgController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -55,8 +60,8 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
       final contextPayload = {
         "motor_state": motor.motorState,
         "connected": motor.connected,
-        "vfd": motor.latestData?.vfd?.toJson() ?? {},
-        "pzem": motor.latestData?.pzem?.toJson() ?? {},
+        "vfd": motor.latestData.vfd?.toJson() ?? {},
+        "pzem": motor.latestData.pzem?.toJson() ?? {},
       };
 
       final response = await http.post(
@@ -75,12 +80,19 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
         });
       } else {
         setState(() {
-          _messages.add({"role": "aria", "content": "I'm having trouble connecting to the logic core. Please try again later."});
+          _messages.add({
+            "role": "aria",
+            "content":
+                "I'm having trouble connecting to the logic core. Please try again later."
+          });
         });
       }
     } catch (e) {
       setState(() {
-        _messages.add({"role": "aria", "content": "Network error. Logical sub-systems offline."});
+        _messages.add({
+          "role": "aria",
+          "content": "Network error. Logical sub-systems offline."
+        });
       });
     } finally {
       setState(() {
@@ -122,11 +134,13 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
           animation: _pulseController,
           builder: (context, child) {
             return Container(
-              width: 60, height: 60,
+              width: 60,
+              height: 60,
               decoration: BoxDecoration(
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.3 * _pulseController.value),
+                    color: AppColors.primary
+                        .withValues(alpha: 0.3 * _pulseController.value),
                     blurRadius: 15,
                     spreadRadius: 2,
                   )
@@ -138,7 +152,9 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
                   color: _isExpanded ? AppColors.accentRed : AppColors.primary,
                   child: Center(
                     child: Icon(
-                      _isExpanded ? Icons.close_rounded : Icons.auto_awesome_rounded,
+                      _isExpanded
+                          ? Icons.close_rounded
+                          : Icons.auto_awesome_rounded,
                       color: Colors.white,
                     ),
                   ),
@@ -168,20 +184,24 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: AppColors.primary.withValues(alpha: 0.1),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
               ),
               child: Row(
                 children: [
                   Container(
-                    width: 8, height: 8,
-                    decoration: const BoxDecoration(color: AppColors.accentGreen, shape: BoxShape.circle),
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                        color: AppColors.accentGreen, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 8),
-                  Text('ARIA AI ASSISTANT', 
+                  Text(
+                    'ARIA AI ASSISTANT',
                     style: TextStyle(
                       color: isDark ? Colors.white : AppColors.lightTextPrimary,
-                      fontWeight: FontWeight.w800, 
-                      fontSize: 13, 
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
                       letterSpacing: 1.2,
                     ),
                   ),
@@ -198,7 +218,8 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
                   if (index == _messages.length) {
                     return _chatBubble("aria", "● ● ●", isTyping: true);
                   }
-                  return _chatBubble(_messages[index]["role"]!, _messages[index]["content"]!);
+                  return _chatBubble(
+                      _messages[index]["role"]!, _messages[index]["content"]!);
                 },
               ),
             ),
@@ -208,7 +229,8 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(
-                    color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.1),
+                    color: (isDark ? Colors.white : Colors.black)
+                        .withValues(alpha: 0.1),
                   ),
                 ),
               ),
@@ -227,14 +249,16 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
                       ),
                       style: TextStyle(
                         fontSize: 14,
-                        color: isDark ? Colors.white : AppColors.lightTextPrimary,
+                        color:
+                            isDark ? Colors.white : AppColors.lightTextPrimary,
                       ),
                       onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
                   IconButton(
                     onPressed: _sendMessage,
-                    icon: const Icon(Icons.send_rounded, color: AppColors.primary, size: 20),
+                    icon: const Icon(Icons.send_rounded,
+                        color: AppColors.primary, size: 20),
                   ),
                 ],
               ),
@@ -255,26 +279,28 @@ class _AriaChatbotState extends State<AriaChatbot> with SingleTickerProviderStat
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         constraints: const BoxConstraints(maxWidth: 260),
         decoration: BoxDecoration(
-          color: isAria 
-            ? (isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05))
-            : AppColors.primary.withValues(alpha: isDark ? 0.2 : 0.8),
+          color: isAria
+              ? (isDark
+                  ? Colors.white.withValues(alpha: 0.05)
+                  : Colors.black.withValues(alpha: 0.05))
+              : AppColors.primary.withValues(alpha: isDark ? 0.2 : 0.8),
           borderRadius: BorderRadius.circular(12).copyWith(
             topLeft: isAria ? const Radius.circular(0) : null,
             topRight: !isAria ? const Radius.circular(0) : null,
           ),
           border: Border.all(
-            color: isAria 
-              ? (isDark ? Colors.white12 : Colors.black12)
-              : AppColors.primary.withValues(alpha: 0.3),
+            color: isAria
+                ? (isDark ? Colors.white12 : Colors.black12)
+                : AppColors.primary.withValues(alpha: 0.3),
           ),
         ),
         child: Text(
           content,
           style: TextStyle(
             fontSize: 13,
-            color: isAria 
-              ? (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary)
-              : Colors.white,
+            color: isAria
+                ? (isDark ? AppColors.textPrimary : AppColors.lightTextPrimary)
+                : Colors.white,
             fontStyle: isTyping ? FontStyle.italic : FontStyle.normal,
           ),
         ),

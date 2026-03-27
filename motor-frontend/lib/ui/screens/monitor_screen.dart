@@ -2,6 +2,7 @@
 //  monitor_screen.dart  —  Full live data panel
 // ============================================================
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/providers/motor_provider.dart';
@@ -24,102 +25,94 @@ class MonitorScreen extends StatelessWidget {
           Expanded(
             child: Builder(
               builder: (context) {
-                final motor = context.read<MotorProvider>();
                 final notifiers = context.read<MotorDataNotifiers>();
-
-                return ValueListenableBuilder(
-                  valueListenable: notifiers.vfd,
-                  builder: (context, vfd, _) {
-                    return ValueListenableBuilder(
-                      valueListenable: notifiers.pzem,
-                      builder: (context, pzem, _) {
-                        return SingleChildScrollView(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // VFD Block
-                              SectionHeader(
-                                title: 'VFD Readings (GD200A)',
-                                subtitle: 'Real-time drive output parameters',
-                                trailing: StatusChip(
-                                  label: motor.deviceConnected ? 'Live' : 'Offline',
-                                  color: motor.deviceConnected
-                                      ? AppColors.statusRunning
-                                      : AppColors.statusStopped,
-                                  pulsing: motor.deviceConnected,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Wrap(
-                                spacing: 16, runSpacing: 16,
-                                children: [
-                                  _DataTile('Set Frequency', vfd.setFreq, 'Hz',
-                                      Icons.tune_rounded, AppColors.primary),
-                                  _DataTile('Output Frequency', vfd.outFreq, 'Hz',
-                                      Icons.waves_rounded, AppColors.accent),
-                                  _DataTile('Output Voltage', vfd.outVolt, 'V',
-                                      Icons.flash_on_rounded, AppColors.accentOrange),
-                                  _DataTile('Output Current', vfd.outCurr, 'A',
-                                      Icons.electrical_services_rounded, AppColors.accentAmber),
-                                  _DataTile('Motor RPM', vfd.motorRpm.toDouble(), 'RPM',
-                                      Icons.speed_rounded, AppColors.primary),
-                                  _DataTile('Active Power', vfd.power, 'W',
-                                      Icons.power_rounded, AppColors.accentGreen),
-                                  _DataTile('Power Factor', vfd.pf, '',
-                                      Icons.analytics_rounded, AppColors.accentRed),
-                                  _DataTile('Input Voltage', vfd.inpVolt, 'V',
-                                      Icons.input_rounded, AppColors.primaryLight),
-                                  _DataTile('Proximity RPM', vfd.proxRpm, 'RPM',
-                                      Icons.radar_rounded, AppColors.accent),
-                                  // Map other fields from VfdSnapshot if they were added
-                                  _DataTile('Phase R', 0, 'V',
-                                      Icons.electric_bolt_rounded, const Color(0xFFFF6B6B)),
-                                  _DataTile('Phase Y', 0, 'V',
-                                      Icons.electric_bolt_rounded, const Color(0xFFFFD93D)),
-                                  _DataTile('Phase B', 0, 'V',
-                                      Icons.electric_bolt_rounded, const Color(0xFF6B9BFF)),
-                                ],
-                              ),
-                              const SizedBox(height: 32),
-
-                              // PZEM Block
-                              SectionHeader(
-                                title: 'Power Meter (PZEM-004T)',
-                                subtitle: 'AC supply measurements',
-                                trailing: StatusChip(
-                                  label: motor.deviceConnected ? 'Live' : 'Offline',
-                                  color: motor.deviceConnected
-                                      ? AppColors.statusRunning
-                                      : AppColors.statusStopped,
-                                  pulsing: motor.deviceConnected,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Wrap(
-                                spacing: 16, runSpacing: 16,
-                                children: [
-                                  _DataTile('Voltage', pzem.voltage, 'V',
-                                      Icons.flash_on_rounded, AppColors.accentOrange),
-                                  _DataTile('Current', pzem.current, 'A',
-                                      Icons.electrical_services_rounded, AppColors.accentAmber),
-                                  _DataTile('Active Power', pzem.power, 'W',
-                                      Icons.power_rounded, AppColors.accentGreen),
-                                  _DataTile('Energy', 0, 'Wh',
-                                      Icons.battery_charging_full_rounded, AppColors.primary),
-                                  _DataTile('Frequency', pzem.freq, 'Hz',
-                                      Icons.waves_rounded, AppColors.accent),
-                                  _DataTile('Power Factor', pzem.pf, '',
-                                      Icons.analytics_rounded, AppColors.accentRed),
-                                ],
-                              ),
-                              const SizedBox(height: 24),
-                            ],
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // VFD Block
+                      SectionHeader(
+                        title: 'VFD Readings (GD200A)',
+                        subtitle: 'Real-time drive output parameters',
+                        trailing: Consumer<MotorProvider>(
+                          builder: (_, motor, __) => StatusChip(
+                            label: motor.deviceConnected ? 'Live' : 'Offline',
+                            color: motor.deviceConnected
+                                ? AppColors.statusRunning
+                                : AppColors.statusStopped,
+                            pulsing: motor.deviceConnected,
                           ),
-                        );
-                      },
-                    );
-                  },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Wrap(
+                        spacing: 16, runSpacing: 16,
+                        children: [
+                          _ListenableDataTile<VfdSnapshot>('Set Frequency', notifiers.vfd, (v) => v.setFreq, 'Hz',
+                              Icons.tune_rounded, AppColors.primary),
+                          _ListenableDataTile<VfdSnapshot>('Output Frequency', notifiers.vfd, (v) => v.outFreq, 'Hz',
+                              Icons.waves_rounded, AppColors.accent),
+                          _ListenableDataTile<VfdSnapshot>('Output Voltage', notifiers.vfd, (v) => v.outVolt, 'V',
+                              Icons.flash_on_rounded, AppColors.accentOrange),
+                          _ListenableDataTile<VfdSnapshot>('Output Current', notifiers.vfd, (v) => v.outCurr, 'A',
+                              Icons.electrical_services_rounded, AppColors.accentAmber),
+                          _ListenableDataTile<VfdSnapshot>('Motor RPM', notifiers.vfd, (v) => v.motorRpm.toDouble(), 'RPM',
+                              Icons.speed_rounded, AppColors.primary),
+                          _ListenableDataTile<VfdSnapshot>('Active Power', notifiers.vfd, (v) => v.power, 'W',
+                              Icons.power_rounded, AppColors.accentGreen),
+                          _ListenableDataTile<VfdSnapshot>('Power Factor', notifiers.vfd, (v) => v.pf, '',
+                              Icons.analytics_rounded, AppColors.accentRed),
+                          _ListenableDataTile<VfdSnapshot>('Input Voltage', notifiers.vfd, (v) => v.inpVolt, 'V',
+                              Icons.input_rounded, AppColors.primaryLight),
+                          _ListenableDataTile<VfdSnapshot>('Proximity RPM', notifiers.vfd, (v) => v.proxRpm, 'RPM',
+                              Icons.radar_rounded, AppColors.accent),
+                          // Static ones
+                          const _DataTile('Phase R', 0, 'V',
+                              Icons.electric_bolt_rounded, Color(0xFFFF6B6B)),
+                          const _DataTile('Phase Y', 0, 'V',
+                              Icons.electric_bolt_rounded, Color(0xFFFFD93D)),
+                          const _DataTile('Phase B', 0, 'V',
+                              Icons.electric_bolt_rounded, Color(0xFF6B9BFF)),
+                        ],
+                      ),
+                      const SizedBox(height: 32),
+
+                      // PZEM Block
+                      SectionHeader(
+                        title: 'Power Meter (PZEM-004T)',
+                        subtitle: 'AC supply measurements',
+                        trailing: Consumer<MotorProvider>(
+                          builder: (_, motor, __) => StatusChip(
+                            label: motor.deviceConnected ? 'Live' : 'Offline',
+                            color: motor.deviceConnected
+                                ? AppColors.statusRunning
+                                : AppColors.statusStopped,
+                            pulsing: motor.deviceConnected,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Wrap(
+                        spacing: 16, runSpacing: 16,
+                        children: [
+                          _ListenableDataTile<PzemSnapshot>('Voltage', notifiers.pzem, (v) => v.voltage, 'V',
+                              Icons.flash_on_rounded, AppColors.accentOrange),
+                          _ListenableDataTile<PzemSnapshot>('Current', notifiers.pzem, (v) => v.current, 'A',
+                              Icons.electrical_services_rounded, AppColors.accentAmber),
+                          _ListenableDataTile<PzemSnapshot>('Active Power', notifiers.pzem, (v) => v.power, 'W',
+                              Icons.power_rounded, AppColors.accentGreen),
+                          const _DataTile('Energy', 0, 'Wh',
+                              Icons.battery_charging_full_rounded, AppColors.primary),
+                          _ListenableDataTile<PzemSnapshot>('Frequency', notifiers.pzem, (v) => v.freq, 'Hz',
+                              Icons.waves_rounded, AppColors.accent),
+                          _ListenableDataTile<PzemSnapshot>('Power Factor', notifiers.pzem, (v) => v.pf, '',
+                              Icons.analytics_rounded, AppColors.accentRed),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+                  ),
                 );
               },
             ),
@@ -173,6 +166,27 @@ class MonitorScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ListenableDataTile<T> extends StatelessWidget {
+  final String label;
+  final ValueListenable<T> valueListenable;
+  final double Function(T) mapper;
+  final String unit;
+  final IconData icon;
+  final Color color;
+
+  const _ListenableDataTile(this.label, this.valueListenable, this.mapper, this.unit, this.icon, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<T>(
+      valueListenable: valueListenable,
+      builder: (context, val, _) {
+        return _DataTile(label, mapper(val), unit, icon, color);
+      },
     );
   }
 }

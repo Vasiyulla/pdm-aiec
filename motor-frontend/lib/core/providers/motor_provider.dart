@@ -1,57 +1,44 @@
-// motor_provider_v3.dart
+// motor_provider_v4.dart
 // ======================
-// MotorProvider now has TWO responsibilities:
+// MotorProvider wired to MotorWsIsolateBridge.
+// Live data arrives as pre-parsed Map<String,dynamic> from the background
+// isolate — the UI thread only converts them to typed snapshots (microseconds).
 //
-//   1. Commands (start/stop/connect/disconnect) — still uses ChangeNotifier
-//      because these are infrequent and it's fine to rebuild the button bar.
+// SETUP in main.dart:
 //
-//   2. Live data — delegated entirely to MotorDataNotifiers (ValueNotifier).
-//      _onMonitorData() never calls notifyListeners(). It pushes to individual
-//      ValueNotifiers so only the affected gauge/chart/card rebuilds.
+//   void main() async {
+//     WidgetsFlutterBinding.ensureInitialized();
 //
-// This means GestureDetector, AppBar, NavBar, buttons — anything that isn't
-// directly displaying live sensor data — are NEVER rebuilt during monitoring.
-// Mouse events and tap responses become instant.
+//     final notifiers = MotorDataNotifiers();
+//     final bridge    = MotorWsIsolateBridge();
+//     // Don't start the isolate yet — start it when user connects to a server.
 //
-// SETUP in main.dart / app root:
-//   MultiProvider(
-//     providers: [
-//       Provider(create: (_) => MotorDataNotifiers()),
-//       ChangeNotifierProvider(create: (ctx) => MotorProvider(
-//         apiService,
-//         websocketService,
-//         ctx.read<MotorDataNotifiers>(),
-//       )),
-//     ],
-//   )
-//
-// USAGE in a gauge widget:
-//   ValueListenableBuilder<VfdSnapshot>(
-//     valueListenable: context.read<MotorDataNotifiers>().vfd,
-//     builder: (_, snap, __) => Text('${snap.motorRpm} RPM'),
-//   )
-//
-// USAGE in a button:
-//   Consumer<MotorProvider>(
-//     builder: (_, mp, __) => ElevatedButton(
-//       onPressed: mp.motorCommand == 'idle' ? () => mp.startMotor() : null,
-//       child: Text(mp.motorCommand == 'idle' ? 'Start' : 'Starting…'),
-//     ),
-//   )
+//     runApp(
+//       MultiProvider(
+//         providers: [
+//           Provider<MotorDataNotifiers>.value(value: notifiers),
+//           Provider<MotorWsIsolateBridge>.value(value: bridge),
+//           ChangeNotifierProvider(
+//             create: (_) => MotorProvider(ApiService(), bridge, notifiers),
+//           ),
+//         ],
+//         child: const MyApp(),
+//       ),
+//     );
+//   }
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
-import '../services/websocket_service.dart';
 import '../models/motor_models.dart';
 import '../../ui/widgets/motor_data_notifiers.dart';
+import '../../core/services/motor_ws_isolate.dart';
 
 const _kAlertDebounce = Duration(milliseconds: 3000);
-const _kStateThrottle = Duration(milliseconds: 500);
 
 class MotorProvider extends ChangeNotifier {
   final ApiService _api;
-  final WebSocketService _ws;
+  final MotorWsIsolateBridge _bridge;
   final MotorDataNotifiers _notifiers;
 
   DeviceStatus? _status;
@@ -61,26 +48,26 @@ class MotorProvider extends ChangeNotifier {
   bool _connected = false;
   bool _loading = false;
   String _motorCommand = 'idle';
-
-  // Weight analysis
   double _s1 = 0.0;
   double _s2 = 0.0;
   final List<Map<String, double>> powerVsWeight = [];
-  static const _kMaxWeightPoints = 200;
 
   DateTime _lastAlertLoad = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _lastStateNotify = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _statusRefreshTimer;
   Timer? _statusPollTimer;
 
-  MotorProvider(this._api, this._ws, this._notifiers) {
-    _ws.monitorStream.listen(_onMonitorData);
-    _ws.alertStream.listen(_onAlert);
+  StreamSubscription? _monitorSub;
+  StreamSubscription? _alertSub;
+
+  MotorProvider(this._api, this._bridge, this._notifiers) {
+    // Subscribe to the background isolate streams.
+    // These callbacks run on the UI isolate's event loop but do almost
+    // zero work — just field reads and ValueNotifier.value = x.
+    _monitorSub = _bridge.monitorStream.listen(_onMonitorMap);
+    _alertSub = _bridge.alertStream.listen(_onAlertMap);
   }
 
   // ── Getters ──────────────────────────────────────────────────────────────
-  // Commands and connection state only — widgets needing live data use
-  // MotorDataNotifiers directly.
   DeviceStatus? get status => _status;
   bool get connected => _connected;
   bool get deviceConnected => _status?.vfdConnected ?? false;
@@ -89,67 +76,54 @@ class MotorProvider extends ChangeNotifier {
   double get s1 => _s1;
   double get s2 => _s2;
   double get weight => (_s1 - _s2).abs();
-  WsState get wsState => _ws.state;
+  String get wsState => _bridge.state;
   ApiService get api => _api;
   List<Map<String, dynamic>> get eventLogs => _eventLogs;
   List<Map<String, dynamic>> get history => _history;
-
   String get motorState => _notifiers.motorState.value.state;
-
   bool get isRunning => motorState == 'FWD' || motorState == 'REV';
+
+  // ── Legacy Compatibility (for older UI code) ──────────────────────────────
   List<AlertModel> get activeAlerts => _notifiers.alerts.value;
   String? get errorMsg => _notifiers.errorMsg.value;
 
-  // ── Compatibility Getters (Proxy to Notifiers) ──────────────────────────
-  // Note: These do NOT trigger rebuilds via notifyListeners().
-  // UI screens should use ValueListenableBuilder<VfdSnapshot> etc. for live updates.
-  VfdSnapshot get vfd => _notifiers.vfd.value;
-  PzemSnapshot get pzem => _notifiers.pzem.value;
-  ChartSnapshot get chartData => _notifiers.charts.value;
-
-  List<double> get rpmHistory => chartData.rpm;
-  List<double> get torqueHistory => chartData.torque;
-  List<double> get freqHistory => chartData.freq;
-  List<double> get powerHistory => chartData.power;
-  List<double> get currentHistory => chartData.current;
-
-  // Recreate MonitorData for legacy screen compatibility
-  MonitorData? get latestData {
-    final v = vfd;
-    final p = pzem;
-    return MonitorData(
-      timestamp: DateTime.now().millisecondsSinceEpoch / 1000.0,
-      motorState: motorState,
-      vfd: VfdData(
-        motorRpm: v.motorRpm,
-        outFreq: v.outFreq,
-        outVolt: v.outVolt,
-        outCurr: v.outCurr,
-        power: v.power,
-        pf: v.pf,
-        inpVolt: v.inpVolt,
-        proxRpm: v.proxRpm,
-      ),
-      pzem: PzemData(
-        voltage: p.voltage,
-        current: p.current,
-        power: p.power,
-        freq: p.freq,
-        pf: p.pf,
-      ),
-    );
-  }
-
+  /// Compatibility getter that constructs a MonitorData snapshot.
+  /// Note: New UI code should use [notifiers] directly for better performance.
+  MonitorData get latestData => MonitorData(
+        timestamp: DateTime.now().millisecondsSinceEpoch / 1000,
+        motorState: motorState,
+        vfd: VfdData(
+          setFreq: _notifiers.vfd.value.setFreq,
+          outFreq: _notifiers.vfd.value.outFreq,
+          outVolt: _notifiers.vfd.value.outVolt,
+          outCurr: _notifiers.vfd.value.outCurr,
+          motorRpm: _notifiers.vfd.value.motorRpm,
+          power: _notifiers.vfd.value.power,
+          pf: _notifiers.vfd.value.pf,
+          inpVolt: _notifiers.vfd.value.inpVolt,
+          proxRpm: _notifiers.vfd.value.proxRpm,
+        ),
+        pzem: PzemData(
+          voltage: _notifiers.pzem.value.voltage,
+          current: _notifiers.pzem.value.current,
+          power: _notifiers.pzem.value.power,
+          freq: _notifiers.pzem.value.freq,
+          pf: _notifiers.pzem.value.pf,
+        ),
+      );
 
   // ── Server URL ────────────────────────────────────────────────────────────
   void setServerUrl(String url) {
     _api.setBaseUrl(url);
-    _ws.setBase(url);
+    // Convert http→ws and tell the background isolate to reconnect
+    final wsUrl =
+        url.replaceFirst(RegExp(r'^http'), 'ws').replaceAll(RegExp(r'/$'), '');
+    _bridge.setUrl(wsUrl);
   }
 
   String get serverUrl => _api.baseUrl;
 
-  // ── Device Connect / Disconnect ─────────────────────────────────────────
+  // ── Device Connect / Disconnect ──────────────────────────────────────────
   Future<bool> connectDevices({
     String? vfdPort,
     String? pzemPort,
@@ -168,7 +142,11 @@ class MotorProvider extends ChangeNotifier {
       );
       if (res['success'] == true) {
         await refreshStatus();
-        _ws.connect();
+        // Start the background WS isolate
+        final wsUrl = serverUrl
+            .replaceFirst(RegExp(r'^http'), 'ws')
+            .replaceAll(RegExp(r'/$'), '');
+        await _bridge.start(wsUrl);
         _startStatusPoll();
         _connected = true;
         _notifiers.motorState.value = MotorStateSnapshot(
@@ -194,7 +172,7 @@ class MotorProvider extends ChangeNotifier {
     _setLoading(true);
     try {
       await _api.disconnect();
-      _ws.disconnect();
+      _bridge.dispose();
       _stopStatusPoll();
       _connected = false;
       _notifiers.motorState.value = const MotorStateSnapshot();
@@ -266,11 +244,10 @@ class MotorProvider extends ChangeNotifier {
     }
   }
 
-  // ── Data Refresh ─────────────────────────────────────────────────────────
+  // ── Data Refresh ──────────────────────────────────────────────────────────
   Future<void> refreshStatus() async {
     try {
       _status = await _api.getStatus();
-      // Update motorState notifier (affects status card, not gauges)
       _notifiers.motorState.value = MotorStateSnapshot(
         state: _status?.motorState ?? 'STOPPED',
         command: _motorCommand,
@@ -284,10 +261,9 @@ class MotorProvider extends ChangeNotifier {
   Future<void> loadAlerts() async {
     try {
       final data = await _api.getAlerts();
-      final list = (data['active'] as List<dynamic>? ?? [])
+      _notifiers.alerts.value = (data['active'] as List<dynamic>? ?? [])
           .map((a) => AlertModel.fromJson(a as Map<String, dynamic>))
           .toList();
-      _notifiers.alerts.value = list;
     } catch (_) {}
   }
 
@@ -310,40 +286,33 @@ class MotorProvider extends ChangeNotifier {
     await loadAlerts();
   }
 
-  // ── Hot path — NEVER calls notifyListeners() ─────────────────────────────
-  void _onMonitorData(MonitorData data) {
-    // Push to fine-grained ValueNotifiers only.
-    // ChangeNotifier listeners (buttons, app bar) are never woken here.
-    _notifiers.updateFromMonitor(data);
+  // ── Hot path — called from bridge stream, does minimal UI-thread work ─────
+  void _onMonitorMap(Map<String, dynamic> map) {
+    // updateFromMap does: field reads + ValueNotifier.value = newSnapshot
+    // Total CPU time on UI thread: ~50 microseconds
+    _notifiers.updateFromMap(map);
 
-    // Update motorState notifier if state changed (cheap string compare)
-    final prev = _notifiers.motorState.value.state;
-    if (data.motorState != prev) {
+    // Check for motor state change
+    final newState = (map['motor_state'] as String?) ?? '';
+    if (newState.isNotEmpty && newState != _notifiers.motorState.value.state) {
       _notifiers.motorState.value = MotorStateSnapshot(
-        state: data.motorState,
+        state: newState,
         command: _motorCommand,
         connected: _connected,
         deviceConnected: deviceConnected,
       );
-      // State change warrants notifying command consumers (button bar etc.)
-      final now = DateTime.now();
-      if (now.difference(_lastStateNotify) > _kStateThrottle) {
-        _lastStateNotify = now;
-        notifyListeners();
-      }
+      // Only notify ChangeNotifier listeners on state changes (rare)
+      notifyListeners();
     }
   }
 
-  void _onAlert(Map<String, dynamic> alert) {
-    // Debounce the HTTP fetch; always update the badge immediately.
+  void _onAlertMap(Map<String, dynamic> alert) {
     final now = DateTime.now();
     if (now.difference(_lastAlertLoad) >= _kAlertDebounce) {
       _lastAlertLoad = now;
       loadAlerts();
     }
-    // Notify for alert badge — this rebuilds the alert count widget only,
-    // not the live data gauges, because those use ValueListenableBuilder.
-    notifyListeners();
+    notifyListeners(); // for badge count only
   }
 
   // ── Weight analysis ───────────────────────────────────────────────────────
@@ -358,12 +327,11 @@ class MotorProvider extends ChangeNotifier {
   }
 
   void recordWeightDataPoint() {
-    if (powerVsWeight.length >= _kMaxWeightPoints) powerVsWeight.removeAt(0);
-    final snap = _notifiers.vfd.value;
-    final power = snap.power;
-    final rpm = snap.motorRpm.toDouble();
-    double torque = 0;
-    if (rpm > 10) torque = power / (2 * 3.14159265 * rpm / 60.0);
+    if (powerVsWeight.length >= 200) powerVsWeight.removeAt(0);
+    final vfd = _notifiers.vfd.value;
+    final power = vfd.power;
+    final rpm = vfd.motorRpm.toDouble();
+    final torque = rpm > 10 ? power / (2 * 3.14159265 * rpm / 60.0) : 0.0;
     powerVsWeight.add({'weight': weight, 'power': power, 'torque': torque});
     notifyListeners();
   }
@@ -386,7 +354,7 @@ class MotorProvider extends ChangeNotifier {
       connected: _connected,
       deviceConnected: deviceConnected,
     );
-    notifyListeners(); // command state change → button bar rebuilds
+    notifyListeners();
   }
 
   void _setLoading(bool v) {
@@ -413,9 +381,10 @@ class MotorProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _monitorSub?.cancel();
+    _alertSub?.cancel();
     _statusRefreshTimer?.cancel();
     _stopStatusPoll();
-    _ws.dispose();
     super.dispose();
   }
 }

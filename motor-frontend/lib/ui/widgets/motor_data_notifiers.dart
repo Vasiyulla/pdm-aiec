@@ -1,78 +1,36 @@
-// motor_data_notifiers.dart
-// =========================
-// Fine-grained ValueNotifiers for live motor data.
+// motor_data_notifiers_v2.dart
+// ============================
+// Adds updateFromMap(Map<String,dynamic>) which is what MotorProvider v4
+// calls when data arrives from the background isolate.
 //
-// WHY THIS EXISTS:
-//   ChangeNotifier.notifyListeners() is a broadcast: every Consumer/Selector
-//   that listens to MotorProvider rebuilds, including heavy chart widgets and
-//   the gesture detector layer. That full-tree relayout is why the mouse feels
-//   frozen — Flutter has to re-hit-test the entire widget tree after every
-//   relayout pass, which happens up to 2× per second with a ChangeNotifier.
-//
-//   ValueNotifier<T> only rebuilds the single ValueListenableBuilder that
-//   wraps the widget that actually uses that data. Everything else — including
-//   GestureDetectors, buttons, and charts that haven't changed — stays
-//   completely untouched between frames.
-//
-// USAGE (in a widget):
-//   ValueListenableBuilder<VfdSnapshot>(
-//     valueListenable: context.read<MotorDataNotifiers>().vfd,
-//     builder: (ctx, snap, _) => RpmGauge(rpm: snap.motorRpm),
-//   )
+// Reading directly from the raw Map avoids constructing a MonitorData object
+// only to immediately deconstruct it — saves ~5-10 allocations per frame.
 
 import 'package:flutter/foundation.dart';
 import '../../core/models/motor_models.dart';
 import 'dart:collection';
 
-// ── Lightweight snapshots (immutable value objects) ──────────────────────────
-// Using plain classes instead of full MonitorData so equality checks are fast.
+// ── Snapshot types (same as v1) ───────────────────────────────────────────────
 
 class VfdSnapshot {
-  final double setFreq;
-  final double outFreq;
-  final double outVolt;
-  final double outCurr;
+  final double setFreq, outFreq, outVolt, outCurr, power, pf, inpVolt, proxRpm;
   final int motorRpm;
-  final double power;
-  final double pf;
-  final double inpVolt;
-  final double proxRpm;
 
   const VfdSnapshot({
     this.setFreq = 0,
     this.outFreq = 0,
     this.outVolt = 0,
     this.outCurr = 0,
-    this.motorRpm = 0,
     this.power = 0,
     this.pf = 0,
     this.inpVolt = 0,
     this.proxRpm = 0,
+    this.motorRpm = 0,
   });
-
-  factory VfdSnapshot.fromVfdData(VfdData? d) {
-    if (d == null) return const VfdSnapshot();
-    return VfdSnapshot(
-      setFreq: d.setFreq ?? 0,
-      outFreq: d.outFreq ?? 0,
-      outVolt: d.outVolt ?? 0,
-      outCurr: d.outCurr ?? 0,
-      motorRpm: d.motorRpm ?? 0,
-      power: d.power ?? 0,
-      pf: d.pf ?? 0,
-      inpVolt: d.inpVolt ?? 0,
-      proxRpm: d.proxRpm ?? 0,
-    );
-  }
 }
 
 class PzemSnapshot {
-  final double voltage;
-  final double current;
-  final double power;
-  final double freq;
-  final double pf;
-
+  final double voltage, current, power, freq, pf;
   const PzemSnapshot({
     this.voltage = 0,
     this.current = 0,
@@ -80,26 +38,10 @@ class PzemSnapshot {
     this.freq = 0,
     this.pf = 0,
   });
-
-  factory PzemSnapshot.fromPzemData(PzemData? d) {
-    if (d == null) return const PzemSnapshot();
-    return PzemSnapshot(
-      voltage: d.voltage ?? 0,
-      current: d.current ?? 0,
-      power: d.power ?? 0,
-      freq: d.freq ?? 0,
-      pf: d.pf ?? 0,
-    );
-  }
 }
 
 class ChartSnapshot {
-  final List<double> rpm;
-  final List<double> current;
-  final List<double> freq;
-  final List<double> power;
-  final List<double> torque;
-
+  final List<double> rpm, current, freq, power, torque;
   const ChartSnapshot({
     this.rpm = const [],
     this.current = const [],
@@ -110,11 +52,8 @@ class ChartSnapshot {
 }
 
 class MotorStateSnapshot {
-  final String state; // STOPPED | FWD | REV | FAULT
-  final String command; // idle | starting | stopping
-  final bool connected;
-  final bool deviceConnected;
-
+  final String state, command;
+  final bool connected, deviceConnected;
   const MotorStateSnapshot({
     this.state = 'STOPPED',
     this.command = 'idle',
@@ -123,10 +62,15 @@ class MotorStateSnapshot {
   });
 }
 
-// ── The notifier bag — provide this once at the app root ─────────────────────
+// ── Helper: safe numeric read from dynamic map value ─────────────────────────
+double _d(dynamic v, [double fallback = 0.0]) =>
+    v == null ? fallback : (v as num).toDouble();
+int _i(dynamic v, [int fallback = 0]) =>
+    v == null ? fallback : (v as num).toInt();
+
+// ── Notifier bag ─────────────────────────────────────────────────────────────
 
 class MotorDataNotifiers {
-  // Each notifier only wakes the widget that uses it.
   final vfd = ValueNotifier<VfdSnapshot>(const VfdSnapshot());
   final pzem = ValueNotifier<PzemSnapshot>(const PzemSnapshot());
   final charts = ValueNotifier<ChartSnapshot>(const ChartSnapshot());
@@ -135,7 +79,6 @@ class MotorDataNotifiers {
   final alerts = ValueNotifier<List<AlertModel>>([]);
   final errorMsg = ValueNotifier<String?>(null);
 
-  // Ring buffer backing stores (only updated from one place — MotorProvider)
   static const _kMax = 60;
   final Queue<double> _rpmQ = Queue();
   final Queue<double> _currQ = Queue();
@@ -143,12 +86,36 @@ class MotorDataNotifiers {
   final Queue<double> _powerQ = Queue();
   final Queue<double> _torqueQ = Queue();
 
-  // Called by MotorProvider._onMonitorData — never by widgets directly.
-  void updateFromMonitor(MonitorData data) {
-    vfd.value = VfdSnapshot.fromVfdData(data.vfd);
-    pzem.value = PzemSnapshot.fromPzemData(data.pzem);
-    _pushChartPoint(data);
-    // charts notifier is set inside _pushChartPoint
+  // ── Called from MotorProvider._onMonitorMap (UI isolate, minimal work) ────
+  void updateFromMap(Map<String, dynamic> map) {
+    final vfdMap = map['vfd'] as Map<String, dynamic>?;
+    final pzemMap = map['pzem'] as Map<String, dynamic>?;
+
+    if (vfdMap != null) {
+      vfd.value = VfdSnapshot(
+        setFreq: _d(vfdMap['set_freq']),
+        outFreq: _d(vfdMap['out_freq']),
+        outVolt: _d(vfdMap['out_volt']),
+        outCurr: _d(vfdMap['out_curr']),
+        motorRpm: _i(vfdMap['motor_rpm']),
+        power: _d(vfdMap['power']),
+        pf: _d(vfdMap['pf']),
+        inpVolt: _d(vfdMap['inp_volt']),
+        proxRpm: _d(vfdMap['prox_rpm']),
+      );
+    }
+
+    if (pzemMap != null) {
+      pzem.value = PzemSnapshot(
+        voltage: _d(pzemMap['voltage']),
+        current: _d(pzemMap['current']),
+        power: _d(pzemMap['power']),
+        freq: _d(pzemMap['freq']),
+        pf: _d(pzemMap['pf']),
+      );
+    }
+
+    _updateCharts(vfdMap, pzemMap);
   }
 
   void _push(Queue<double> q, double? v) {
@@ -157,23 +124,37 @@ class MotorDataNotifiers {
     if (q.length > _kMax) q.removeFirst();
   }
 
-  void _pushChartPoint(MonitorData data) {
-    _push(_rpmQ, data.vfd?.motorRpm?.toDouble());
-    _push(_currQ, data.vfd?.outCurr ?? data.pzem?.current);
-    _push(_freqQ, data.vfd?.outFreq);
-    _push(_powerQ, data.vfd?.power ?? data.pzem?.power);
+  void _updateCharts(
+    Map<String, dynamic>? vfdMap,
+    Map<String, dynamic>? pzemMap,
+  ) {
+    final rpm = vfdMap != null ? _d(vfdMap['motor_rpm']) : null;
+    final curr = vfdMap != null
+        ? _d(vfdMap['out_curr'])
+        : pzemMap != null
+            ? _d(pzemMap['current'])
+            : null;
+    final freq = vfdMap != null ? _d(vfdMap['out_freq']) : null;
+    final power = vfdMap != null
+        ? _d(vfdMap['power'])
+        : pzemMap != null
+            ? _d(pzemMap['power'])
+            : null;
 
-    final rpm = data.vfd?.motorRpm?.toDouble() ?? 0;
-    final power = (data.vfd?.power ?? data.pzem?.power ?? 0).toDouble();
-    if (rpm > 10) {
-      final torque = power / (2 * 3.14159265 * rpm / 60.0);
+    _push(_rpmQ, rpm);
+    _push(_currQ, curr);
+    _push(_freqQ, freq);
+    _push(_powerQ, power);
+
+    final rpmVal = rpm ?? 0;
+    final powerVal = power ?? 0;
+    if (rpmVal > 10) {
+      final torque = powerVal / (2 * 3.14159265 * rpmVal / 60.0);
       _push(_torqueQ, torque.clamp(0, 500));
     } else {
       _push(_torqueQ, 0.0);
     }
 
-    // Publish a new ChartSnapshot — widgets holding stale list refs won't
-    // accidentally see future mutations because toList() copies.
     charts.value = ChartSnapshot(
       rpm: _rpmQ.toList(),
       current: _currQ.toList(),

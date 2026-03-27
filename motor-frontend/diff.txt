@@ -1,0 +1,12 @@
+﻿diff --git a/motor-frontend/lib/core/providers/motor_provider.dart b/motor-frontend/lib/core/providers/motor_provider.dart
+index 281ced1..5832eec 100644
+--- a/motor-frontend/lib/core/providers/motor_provider.dart
++++ b/motor-frontend/lib/core/providers/motor_provider.dart
+@@ -140,7 +140,6 @@ class MotorProvider extends ChangeNotifier {
+     );
+   }
+ 
+-
+   // ΓöÇΓöÇ Server URL ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+   void setServerUrl(String url) {
+     _api.setBaseUrl(url);
