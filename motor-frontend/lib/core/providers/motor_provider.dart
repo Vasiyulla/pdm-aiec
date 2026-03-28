@@ -34,8 +34,6 @@ import '../models/motor_models.dart';
 import '../../ui/widgets/motor_data_notifiers.dart';
 import '../../core/services/motor_data_worker.dart';
 
-
-
 class MotorProvider extends ChangeNotifier {
   final ApiService _api;
   final MotorDataWorkerBridge _bridge;
@@ -51,7 +49,6 @@ class MotorProvider extends ChangeNotifier {
   double _s1 = 0.0;
   double _s2 = 0.0;
   final List<Map<String, double>> powerVsWeight = [];
-
 
   Timer? _statusRefreshTimer;
   Timer? _statusPollTimer;
@@ -285,9 +282,15 @@ class MotorProvider extends ChangeNotifier {
     await loadAlerts();
   }
 
+  int _lastUpdate = 0;
   // ── Hot path — called from bridge stream, does minimal UI-thread work ─────
   // ── High-performance path: Process worker's pre-built snapshots ────────────
   void _onWorkerPackage(Map<String, dynamic> package) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (now - _lastUpdate < 200) return;
+    _lastUpdate = now;
+
     final tag = package['tag'] as String?;
     final data = package['data'];
 
@@ -296,7 +299,8 @@ class MotorProvider extends ChangeNotifier {
       _notifiers.updateFromWorkerSnapshot(data);
 
       final newState = (data['motor_state'] as String?) ?? '';
-      if (newState.isNotEmpty && newState != _notifiers.motorState.value.state) {
+      if (newState.isNotEmpty &&
+          newState != _notifiers.motorState.value.state) {
         _notifiers.motorState.value = MotorStateSnapshot(
           state: newState,
           command: _motorCommand,
@@ -312,7 +316,6 @@ class MotorProvider extends ChangeNotifier {
       // handle 'connected' etc
     }
   }
-
 
   // ── Weight analysis ───────────────────────────────────────────────────────
   void setS1(double kg) {
