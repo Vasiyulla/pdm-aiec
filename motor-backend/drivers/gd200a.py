@@ -21,15 +21,33 @@ _SHARED_PORTS: dict = {}
 
 
 def get_shared_serial(port: str, baud: int, parity: str, stopbits: int):
-    key = port.upper()
+    # Unique key includes all settings to avoid re-using a port with wrong baud/parity
+    key = f"{port.upper()}_{baud}_{parity}_{stopbits}"
     if key in _SHARED_PORTS:
-        return _SHARED_PORTS[key]
+        s = _SHARED_PORTS[key]
+        if s.is_open:
+            return s
+        s.open()
+        return s
+        
     s = _ser.Serial(
         port, baud, bytesize=8,
         parity=parity, stopbits=stopbits,
-        timeout=0.5)            # FIX: was 1.0 s — cuts failed-read latency in half
+        timeout=0.5)
     _SHARED_PORTS[key] = s
     return s
+
+def close_shared_serial(port: str):
+    # Close any shared port matching the device name
+    to_del = []
+    for k, s in _SHARED_PORTS.items():
+        if k.startswith(f"{port.upper()}_"):
+            try:
+                if s.is_open: s.close()
+            except: pass
+            to_del.append(k)
+    for k in to_del:
+        del _SHARED_PORTS[k]
 
 
 SLAVE_ID = 1

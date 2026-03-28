@@ -1,147 +1,122 @@
-// motor_ws_isolate.dart
-// =====================
-// A dedicated Dart Isolate that owns the WebSocket connection completely.
+// motor_ws_isolate.dart  (v2 — fixed isolate message error)
+// ==========================================================
+// FIX: _IsolateConfig previously contained a ReceivePort, which is
+// unsendable across isolate boundaries. Dart's Isolate.spawn() only
+// accepts primitives and SendPort objects in the initial message.
 //
-// THE CORE PROBLEM THIS SOLVES:
-//   Even with ValueNotifier, every callback from dart:io WebSocket fires on
-//   the main isolate's event loop. jsonDecode(), stream.listen(), and even
-//   async/await scheduling all compete with Flutter's raster/UI threads for
-//   the single main-isolate event loop. When a motor starts, the VFD sends
-//   data bursts and the event loop drains them — blocking gesture hit-testing
-//   for 8-20ms per burst, which the user feels as mouse lag or missed taps.
-//
-// THE FIX:
-//   Spawn a second Dart Isolate at startup. It:
-//     - Opens and owns the WebSocket connection
-//     - Calls jsonDecode() on raw frames (never the UI thread)
-//     - Applies the 1-Hz throttle before sending anything
-//     - Handles reconnect with exponential back-off
-//     - Sends a plain Map<String,dynamic> snapshot to the UI via SendPort
-//   The UI isolate receives pre-parsed Maps through its ReceivePort and
-//   only creates the typed snapshot objects (VfdSnapshot etc.) — which is
-//   microseconds of work, not milliseconds.
-//
-// ISOLATE COMMUNICATION:
-//   Isolates share NOTHING — no heap, no static variables.
-//   The only channel is SendPort / ReceivePort (message passing).
-//   Messages must be primitives or Maps/Lists of primitives (no custom classes).
-//
-// USAGE:
-//   final bridge = MotorWsIsolateBridge();
-//   await bridge.start('ws://192.168.1.100:8000');
-//   bridge.monitorStream.listen((snap) => notifiers.updateFromMap(snap));
-//   bridge.alertStream.listen((alert) => ...);
-//   bridge.dispose();
+// CORRECT PATTERN (two-SendPort handshake):
+//   1. UI creates its own ReceivePort (_fromWorker) and passes only
+//      its SendPort to the worker via Isolate.spawn().
+//   2. Worker creates its own ReceivePort for incoming commands, then
+//      immediately sends ITS SendPort back to the UI as the first message.
+//   3. UI receives that SendPort and stores it as _toWorker.
+//   Both sides now have a SendPort to the other — fully legal.
 
 import 'dart:async';
 import 'dart:isolate';
 import 'dart:convert';
 import 'package:web_socket_channel/io.dart';
 
-// ── Message tags (UI ↔ isolate protocol) ─────────────────────────────────────
+// ── Message tags ──────────────────────────────────────────────────────────────
 const _kTagMonitor = 'monitor';
 const _kTagAlert = 'alert';
-const _kTagState = 'state'; // connection state string
-//const _kTagCmd = 'cmd'; // command from UI to isolate
+const _kTagState = 'state';
 const _kCmdSetUrl = 'set_url';
 const _kCmdDisconnect = 'disconnect';
 
-// ── Entry point (runs in the background isolate) ──────────────────────────────
-// Top-level function required by Isolate.spawn.
-void _wsIsolateMain(_IsolateConfig cfg) {
-  final worker = _WsWorker(cfg.sendPort);
+// ── _IsolateConfig: ONLY SendPort + primitives — nothing unsendable ───────────
+class _IsolateConfig {
+  final SendPort uiSendPort; // worker writes back to UI on this
+  final String initialUrl;
+  _IsolateConfig({required this.uiSendPort, required this.initialUrl});
+}
+
+// ── Isolate entry point (must be top-level for Isolate.spawn) ─────────────────
+void _wsIsolateEntry(_IsolateConfig cfg) {
+  // Worker creates its OWN ReceivePort for commands — never passed via config
+  final cmdPort = ReceivePort();
+
+  // Handshake: send worker's SendPort to UI as very first message
+  cfg.uiSendPort.send(cmdPort.sendPort);
+
+  final worker = _WsWorker(cfg.uiSendPort);
   worker.run(cfg.initialUrl);
-  // Also accept commands from the UI isolate
-  cfg.receivePort.listen((msg) {
-    if (msg is Map && msg['cmd'] == _kCmdSetUrl) {
-      worker.setUrl(msg['url'] as String);
-    } else if (msg is Map && msg['cmd'] == _kCmdDisconnect) {
-      worker.disconnect();
+
+  cmdPort.listen((msg) {
+    if (msg is! Map) return;
+    switch (msg['cmd'] as String?) {
+      case _kCmdSetUrl:
+        worker.setUrl(msg['url'] as String);
+      case _kCmdDisconnect:
+        worker.disconnect();
+        cmdPort.close();
     }
   });
 }
 
-class _IsolateConfig {
-  final SendPort sendPort;
-  final ReceivePort receivePort;
-  final String initialUrl;
-  _IsolateConfig(this.sendPort, this.receivePort, this.initialUrl);
-}
-
-// ── The worker that runs inside the background isolate ────────────────────────
+// ── Worker ────────────────────────────────────────────────────────────────────
 class _WsWorker {
   final SendPort _toUi;
-
-  dynamic _monitorChannel;
-  dynamic _alertChannel;
-  StreamSubscription? _monitorSub;
-  StreamSubscription? _alertSub;
-  Timer? _reconnectTimer;
-
-  String _baseUrl = '';
+  dynamic _monCh, _altCh;
+  StreamSubscription? _monSub, _altSub;
+  Timer? _retryTimer;
+  String _url = '';
   bool _disposed = false;
-  int _retryCount = 0;
+  int _retries = 0;
 
-  // Throttle: only forward one monitor frame per second to UI isolate
   DateTime _lastSent = DateTime.fromMillisecondsSinceEpoch(0);
-  static const _kThrottle = Duration(milliseconds: 1000);
+  static const _throttle = Duration(milliseconds: 1000);
 
   _WsWorker(this._toUi);
 
-  void run(String baseUrl) {
-    _baseUrl = baseUrl;
+  void run(String url) {
+    _url = url;
     _connect();
   }
 
   void setUrl(String url) {
-    _baseUrl = url;
-    _disconnect();
-    _retryCount = 0;
+    _url = url;
+    _close();
+    _retries = 0;
     _connect();
   }
 
   void disconnect() {
     _disposed = true;
-    _disconnect();
+    _close();
   }
 
   void _connect() {
     if (_disposed) return;
-    _connectMonitor();
-    _connectAlerts();
+    _toUi.send({'tag': _kTagState, 'data': 'connecting'});
+    _openMonitor();
+    _openAlerts();
   }
 
-  void _connectMonitor() {
+  void _openMonitor() {
     try {
-      _monitorChannel = IOWebSocketChannel.connect(
-        Uri.parse('$_baseUrl/ws/monitor'),
-        connectTimeout: const Duration(seconds: 5),
-      );
-      _toUi.send({'tag': _kTagState, 'data': 'connecting'});
-
-      _monitorSub = _monitorChannel.stream.listen(
+      _monCh = IOWebSocketChannel.connect(Uri.parse('$_url/ws/monitor'),
+          connectTimeout: const Duration(seconds: 5));
+      _monSub = _monCh.stream.listen(
         (raw) {
-          _retryCount = 0;
-          _toUi.send({'tag': _kTagState, 'data': 'connected'});
-          _handleMonitorFrame(raw as String);
+          _retries = 0;
+          _onMonitor(raw as String);
         },
-        onError: (_) => _scheduleReconnect(),
-        onDone: () => _scheduleReconnect(),
+        onError: (_) => _retry(),
+        onDone: () => _retry(),
         cancelOnError: false,
       );
     } catch (_) {
-      _scheduleReconnect();
+      _retry();
     }
   }
 
-  void _connectAlerts() {
+  void _openAlerts() {
     try {
-      _alertChannel = IOWebSocketChannel.connect(
-        Uri.parse('$_baseUrl/ws/alerts'),
-        connectTimeout: const Duration(seconds: 5),
-      );
-      _alertSub = _alertChannel.stream.listen(
-        (raw) => _handleAlertFrame(raw as String),
+      _altCh = IOWebSocketChannel.connect(Uri.parse('$_url/ws/alerts'),
+          connectTimeout: const Duration(seconds: 5));
+      _altSub = _altCh.stream.listen(
+        (raw) => _onAlert(raw as String),
         onError: (_) {},
         onDone: () {},
         cancelOnError: false,
@@ -149,128 +124,119 @@ class _WsWorker {
     } catch (_) {}
   }
 
-  // JSON decode + throttle happen HERE, in the background isolate
-  void _handleMonitorFrame(String raw) {
+  void _onMonitor(String raw) {
     final now = DateTime.now();
-    if (now.difference(_lastSent) < _kThrottle) return; // throttle
+    if (now.difference(_lastSent) < _throttle) return;
     _lastSent = now;
-
+    _toUi.send({'tag': _kTagState, 'data': 'connected'});
     try {
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      // Send only the primitive map — no custom Dart objects cross isolate boundary
-      _toUi.send({'tag': _kTagMonitor, 'data': map});
-    } catch (_) {
-      // Bad JSON — silently discard
-    }
-  }
-
-  void _handleAlertFrame(String raw) {
-    try {
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      _toUi.send({'tag': _kTagAlert, 'data': map});
+      // jsonDecode runs in background isolate — UI thread never touched
+      _toUi.send({'tag': _kTagMonitor, 'data': jsonDecode(raw)});
     } catch (_) {}
   }
 
-  void _scheduleReconnect() {
+  void _onAlert(String raw) {
+    try {
+      _toUi.send({'tag': _kTagAlert, 'data': jsonDecode(raw)});
+    } catch (_) {}
+  }
+
+  void _retry() {
     if (_disposed) return;
-    _disconnect();
+    _close();
     _toUi.send({'tag': _kTagState, 'data': 'reconnecting'});
-    // Exponential back-off: 1s, 2s, 4s, 8s, capped at 16s
-    final delay = Duration(seconds: (1 << _retryCount.clamp(0, 4)));
-    _retryCount++;
-    _reconnectTimer = Timer(delay, _connect);
+    final delay = Duration(seconds: (1 << _retries.clamp(0, 4)));
+    _retries++;
+    _retryTimer = Timer(delay, _connect);
   }
 
-  void _disconnect() {
-    _monitorSub?.cancel();
-    _alertSub?.cancel();
-    _reconnectTimer?.cancel();
+  void _close() {
+    _monSub?.cancel();
+    _altSub?.cancel();
+    _retryTimer?.cancel();
     try {
-      _monitorChannel?.sink?.close();
+      _monCh?.sink.close();
     } catch (_) {}
     try {
-      _alertChannel?.sink?.close();
+      _altCh?.sink.close();
     } catch (_) {}
-    _monitorChannel = null;
-    _alertChannel = null;
+    _monCh = _altCh = null;
   }
 }
 
-// ── Public bridge used by the UI isolate ─────────────────────────────────────
+// ── Bridge used by the UI isolate ─────────────────────────────────────────────
 class MotorWsIsolateBridge {
   Isolate? _isolate;
-  ReceivePort? _fromWorker; // UI receives on this
-  SendPort? _toWorker; // UI sends commands on this
-  ReceivePort? _workerCmdPort; // worker receives commands on this
+  ReceivePort? _fromWorker;
+  SendPort? _toWorker;
 
-  final _monitorController = StreamController<Map<String, dynamic>>.broadcast();
-  final _alertController = StreamController<Map<String, dynamic>>.broadcast();
-  final _stateController = StreamController<String>.broadcast();
+  final _monC = StreamController<Map<String, dynamic>>.broadcast();
+  final _altC = StreamController<Map<String, dynamic>>.broadcast();
+  final _stC = StreamController<String>.broadcast();
 
-  Stream<Map<String, dynamic>> get monitorStream => _monitorController.stream;
-  Stream<Map<String, dynamic>> get alertStream => _alertController.stream;
-  Stream<String> get stateStream => _stateController.stream;
+  Stream<Map<String, dynamic>> get monitorStream => _monC.stream;
+  Stream<Map<String, dynamic>> get alertStream => _altC.stream;
+  Stream<String> get stateStream => _stC.stream;
 
-  String _lastState = 'disconnected';
-  String get state => _lastState;
+  String _state = 'disconnected';
+  String get state => _state;
+  bool _started = false;
 
-  /// Start the background isolate. Call once at app startup.
-  Future<void> start(String wsBaseUrl) async {
+  Future<void> start(String wsBase) async {
+    if (_started) {
+      setUrl(wsBase);
+      return;
+    }
+    _started = true;
     _fromWorker = ReceivePort();
-    _workerCmdPort = ReceivePort();
-
-    _fromWorker!.listen(_onMessage);
+    _fromWorker!.listen(_onMsg);
 
     _isolate = await Isolate.spawn(
-      _wsIsolateMain,
-      _IsolateConfig(_fromWorker!.sendPort, _workerCmdPort!, wsBaseUrl),
+      _wsIsolateEntry,
+      _IsolateConfig(
+        uiSendPort: _fromWorker!.sendPort, // ✅ SendPort only — no ReceivePort
+        initialUrl: wsBase, // ✅ String — primitive
+      ),
       debugName: 'motor_ws_isolate',
+      errorsAreFatal: false,
     );
-
-    // The worker will send its SendPort back as first message so UI can send commands
-    // We capture it in _onMessage below.
   }
 
-  void _onMessage(dynamic msg) {
+  void _onMsg(dynamic msg) {
+    // Handshake: first message is the worker's command SendPort
     if (msg is SendPort) {
-      // First message from isolate is its command port
       _toWorker = msg;
       return;
     }
     if (msg is! Map) return;
+
     final tag = msg['tag'] as String?;
     final data = msg['data'];
-
     switch (tag) {
       case _kTagMonitor:
-        if (data is Map<String, dynamic>) {
-          _monitorController.add(data);
-        }
+        if (data is Map<String, dynamic> && !_monC.isClosed) _monC.add(data);
       case _kTagAlert:
-        if (data is Map<String, dynamic>) {
-          _alertController.add(data);
-        }
+        if (data is Map<String, dynamic> && !_altC.isClosed) _altC.add(data);
       case _kTagState:
-        _lastState = data as String? ?? 'unknown';
-        _stateController.add(_lastState);
+        _state = (data as String?) ?? 'unknown';
+        if (!_stC.isClosed) _stC.add(_state);
     }
   }
 
-  /// Change the server URL at runtime (e.g. user updates settings).
-  void setUrl(String wsBaseUrl) {
-    _toWorker?.send({'cmd': _kCmdSetUrl, 'url': wsBaseUrl});
-  }
+  void setUrl(String wsBase) =>
+      _toWorker?.send({'cmd': _kCmdSetUrl, 'url': wsBase});
 
-  /// Cleanly shut down the background isolate.
   void dispose() {
+    if (!_started) return;
+    _started = false;
     _toWorker?.send({'cmd': _kCmdDisconnect});
-    Future.delayed(const Duration(milliseconds: 100), () {
+    Future.delayed(const Duration(milliseconds: 200), () {
       _isolate?.kill(priority: Isolate.beforeNextEvent);
       _fromWorker?.close();
-      _workerCmdPort?.close();
+      _isolate = _fromWorker = _toWorker = null;
     });
-    _monitorController.close();
-    _alertController.close();
-    _stateController.close();
+    _monC.close();
+    _altC.close();
+    _stC.close();
   }
 }

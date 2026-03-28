@@ -32,7 +32,7 @@ from app.ws.connection_manager import ws_monitor_manager, ws_alert_manager
 logger = logging.getLogger("motor.poller")
 
 # ── Tunable constants ─────────────────────────────────────────────────────────
-_POLL_INTERVAL   = 1.5   # seconds between hardware reads
+_POLL_INTERVAL   = 1.0   # seconds between hardware reads
 _WS_THROTTLE     = 1.0   # minimum seconds between WebSocket broadcasts
 _BACKOFF_ERRORS  = 5     # consecutive failures before backing off
 _BACKOFF_INTERVAL = 5.0  # seconds to sleep during backoff

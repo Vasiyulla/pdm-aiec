@@ -32,13 +32,13 @@ import 'package:flutter/foundation.dart';
 import '../services/api_service.dart';
 import '../models/motor_models.dart';
 import '../../ui/widgets/motor_data_notifiers.dart';
-import '../../core/services/motor_ws_isolate.dart';
+import '../../core/services/motor_data_worker.dart';
 
-const _kAlertDebounce = Duration(milliseconds: 3000);
+
 
 class MotorProvider extends ChangeNotifier {
   final ApiService _api;
-  final MotorWsIsolateBridge _bridge;
+  final MotorDataWorkerBridge _bridge;
   final MotorDataNotifiers _notifiers;
 
   DeviceStatus? _status;
@@ -52,7 +52,7 @@ class MotorProvider extends ChangeNotifier {
   double _s2 = 0.0;
   final List<Map<String, double>> powerVsWeight = [];
 
-  DateTime _lastAlertLoad = DateTime.fromMillisecondsSinceEpoch(0);
+
   Timer? _statusRefreshTimer;
   Timer? _statusPollTimer;
 
@@ -60,11 +60,10 @@ class MotorProvider extends ChangeNotifier {
   StreamSubscription? _alertSub;
 
   MotorProvider(this._api, this._bridge, this._notifiers) {
-    // Subscribe to the background isolate streams.
-    // These callbacks run on the UI isolate's event loop but do almost
-    // zero work — just field reads and ValueNotifier.value = x.
-    _monitorSub = _bridge.monitorStream.listen(_onMonitorMap);
-    _alertSub = _bridge.alertStream.listen(_onAlertMap);
+    // Subscribe to the worker's processed stream.
+    // Each package already contains mapped snapshots for VFD, PZEM, and Charts.
+    _monitorSub = _bridge.dataStream.listen(_onWorkerPackage);
+    // Alerts still come from REST/Poll for legacy but worker can also emit them
   }
 
   // ── Getters ──────────────────────────────────────────────────────────────
@@ -146,7 +145,7 @@ class MotorProvider extends ChangeNotifier {
         final wsUrl = serverUrl
             .replaceFirst(RegExp(r'^http'), 'ws')
             .replaceAll(RegExp(r'/$'), '');
-        await _bridge.start(wsUrl);
+        await _bridge.init(wsUrl);
         _startStatusPoll();
         _connected = true;
         _notifiers.motorState.value = MotorStateSnapshot(
@@ -287,33 +286,33 @@ class MotorProvider extends ChangeNotifier {
   }
 
   // ── Hot path — called from bridge stream, does minimal UI-thread work ─────
-  void _onMonitorMap(Map<String, dynamic> map) {
-    // updateFromMap does: field reads + ValueNotifier.value = newSnapshot
-    // Total CPU time on UI thread: ~50 microseconds
-    _notifiers.updateFromMap(map);
+  // ── High-performance path: Process worker's pre-built snapshots ────────────
+  void _onWorkerPackage(Map<String, dynamic> package) {
+    final tag = package['tag'] as String?;
+    final data = package['data'];
 
-    // Check for motor state change
-    final newState = (map['motor_state'] as String?) ?? '';
-    if (newState.isNotEmpty && newState != _notifiers.motorState.value.state) {
-      _notifiers.motorState.value = MotorStateSnapshot(
-        state: newState,
-        command: _motorCommand,
-        connected: _connected,
-        deviceConnected: deviceConnected,
-      );
-      // Only notify ChangeNotifier listeners on state changes (rare)
-      notifyListeners();
-    }
-  }
+    if (tag == 'monitor' && data is Map<String, dynamic>) {
+      // Step 3.1: Pass snapshots to notifiers (UI Isolates only does assignment)
+      _notifiers.updateFromWorkerSnapshot(data);
 
-  void _onAlertMap(Map<String, dynamic> alert) {
-    final now = DateTime.now();
-    if (now.difference(_lastAlertLoad) >= _kAlertDebounce) {
-      _lastAlertLoad = now;
+      final newState = (data['motor_state'] as String?) ?? '';
+      if (newState.isNotEmpty && newState != _notifiers.motorState.value.state) {
+        _notifiers.motorState.value = MotorStateSnapshot(
+          state: newState,
+          command: _motorCommand,
+          connected: _connected,
+          deviceConnected: deviceConnected,
+        );
+        notifyListeners();
+      }
+    } else if (tag == 'alert') {
+      // Trigger API reload on WebSocket nudge to keep list in sync
       loadAlerts();
+    } else if (tag == 'state') {
+      // handle 'connected' etc
     }
-    notifyListeners(); // for badge count only
   }
+
 
   // ── Weight analysis ───────────────────────────────────────────────────────
   void setS1(double kg) {

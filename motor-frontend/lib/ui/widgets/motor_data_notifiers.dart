@@ -118,6 +118,47 @@ class MotorDataNotifiers {
     _updateCharts(vfdMap, pzemMap);
   }
 
+  // ── Faster path for pre-processed worker snapshots ─────────────────────────
+  void updateFromWorkerSnapshot(Map<String, dynamic> data) {
+    final vfdSnap = data['vfd'] as Map<String, dynamic>?;
+    final pzemSnap = data['pzem'] as Map<String, dynamic>?;
+    final chartSnap = data['charts'] as Map<String, dynamic>?;
+
+    if (vfdSnap != null) {
+      vfd.value = VfdSnapshot(
+        setFreq: vfdSnap['setFreq'],
+        outFreq: vfdSnap['outFreq'],
+        outVolt: vfdSnap['outVolt'],
+        outCurr: vfdSnap['outCurr'],
+        motorRpm: vfdSnap['motorRpm'],
+        power: vfdSnap['power'],
+        pf: vfdSnap['pf'],
+        inpVolt: vfdSnap['inpVolt'],
+        proxRpm: vfdSnap['proxRpm'],
+      );
+    }
+
+    if (pzemSnap != null) {
+      pzem.value = PzemSnapshot(
+        voltage: pzemSnap['voltage'],
+        current: pzemSnap['current'],
+        power: pzemSnap['power'],
+        freq: pzemSnap['freq'],
+        pf: pzemSnap['pf'],
+      );
+    }
+
+    if (chartSnap != null) {
+      charts.value = ChartSnapshot(
+        rpm: (chartSnap['rpm'] as List<dynamic>).cast<double>(),
+        current: (chartSnap['current'] as List<dynamic>).cast<double>(),
+        freq: (chartSnap['freq'] as List<dynamic>).cast<double>(),
+        power: (chartSnap['power'] as List<dynamic>).cast<double>(),
+        torque: (chartSnap['torque'] as List<dynamic>).cast<double>(),
+      );
+    }
+  }
+
   void _push(Queue<double> q, double? v) {
     if (v == null || v.isNaN || v.isInfinite) return;
     q.addLast(v);

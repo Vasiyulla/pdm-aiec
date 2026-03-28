@@ -37,12 +37,16 @@ async def connect_devices(req: ConnectRequest):
         results["vfd"] = r
         if r["success"]:
             await log_event("CONNECT", f"VFD connected on {req.vfd_port}")
+        else:
+            await log_event("ERROR", f"VFD connection failed on {req.vfd_port}: {r.get('error')}")
 
     if req.pzem_port:
         r = await dm.connect_pzem(req.pzem_port, req.pzem_baud)
         results["pzem"] = r
         if r["success"]:
             await log_event("CONNECT", f"PZEM connected on {req.pzem_port}")
+        else:
+            await log_event("ERROR", f"PZEM connection failed on {req.pzem_port}: {r.get('error')}")
 
     any_ok  = any(v.get("success") for v in results.values())
     any_err = [v.get("error") for v in results.values() if not v.get("success")]

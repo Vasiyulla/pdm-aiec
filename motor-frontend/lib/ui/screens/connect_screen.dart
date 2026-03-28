@@ -19,8 +19,8 @@ class ConnectScreen extends StatefulWidget {
 }
 
 class _ConnectScreenState extends State<ConnectScreen> {
-  final _vfdPortCtrl = TextEditingController(text: 'COM7');
-  final _pzemPortCtrl = TextEditingController(text: 'COM5');
+  final _vfdPortCtrl = TextEditingController(text: 'COM4');
+  final _pzemPortCtrl = TextEditingController(text: 'COM3');
   final _serverUrlCtrl = TextEditingController(text: 'http://localhost:8000');
   int _vfdBaud = 9600;
   int _pzemBaud = 9600;
